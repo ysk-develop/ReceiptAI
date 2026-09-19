@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0f766e">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>レシート自動仕分け家計簿</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <header class="header">
+    <h1>🧾 レシート自動仕分け</h1>
+    <p class="subtitle">写真・メモからAIが品目を抽出し、家計簿へ</p>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-tab="analyze" role="tab" aria-selected="true">解析</button>
+    <button class="tab" data-tab="settings" role="tab" aria-selected="false">設定</button>
+  </nav>
+
+  <main>
+    <section id="tab-analyze" class="tab-panel active" role="tabpanel">
+      <div class="card">
+        <label class="file-label" for="imageInput">
+          <span class="file-icon">📷</span>
+          <span>レシート写真を選択</span>
+        </label>
+        <input type="file" id="imageInput" accept="image/*">
+        <div id="imagePreview" class="image-preview hidden">
+          <img id="previewImg" alt="選択したレシート">
+        </div>
+        <div class="form-row" style="margin-top:1rem">
+          <label for="textMemo">テキストメモ（画像がなくても可）</label>
+          <textarea id="textMemo" rows="2" placeholder="例：ドラッグストア、ティッシュ 235円、お茶 100円"></textarea>
+        </div>
+        <p id="imageStatus" class="status-text">写真を選ぶか、メモを入力してください</p>
+        <div class="btn-row">
+          <button id="analyzeBtn" class="btn btn-primary">AIで解析</button>
+          <button id="clearBtn" class="btn btn-secondary">クリア</button>
+        </div>
+        <button id="manualSaveBtn" class="btn btn-secondary">手入力で明細を追加</button>
+      </div>
+
+      <div id="loadingArea" class="loading hidden">
+        <div class="spinner"></div>
+        <p>解析中...</p>
+      </div>
+
+      <div id="errorArea" class="error-box hidden"></div>
+
+      <div id="resultArea" class="hidden">
+        <div class="card">
+          <h2>検出サマリー</h2>
+          <div id="detectedSummary" class="notice"></div>
+        </div>
+
+        <div class="card">
+          <h2>内容確認・修正</h2>
+          <div class="form-grid">
+            <div class="form-row">
+              <label for="shopName">店舗名</label>
+              <input type="text" id="shopName" placeholder="店舗名">
+            </div>
+            <div class="form-row">
+              <label for="receiptDate">日付</label>
+              <input type="date" id="receiptDate">
+            </div>
+          </div>
+
+          <p class="hint" style="margin-top:0.75rem">明細一覧（タップして修正できます）</p>
+          <div class="item-head">
+            <span>品目</span>
+            <span>金額</span>
+            <span>カテゴリ</span>
+            <span></span>
+          </div>
+          <div id="itemList"></div>
+          <button id="addItemBtn" class="btn btn-secondary btn-sm">+ 明細行を追加</button>
+
+          <div class="total-box">
+            <span>合計金額</span>
+            <span id="totalPrice" class="total-price">0 円</span>
+          </div>
+
+          <button id="sendBtn" class="btn btn-success">☁ Googleドライブへ保存</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="tab-settings" class="tab-panel" role="tabpanel">
+      <details class="settings-section" id="apiSettings" open>
+        <summary>Gemini API</summary>
+        <div class="settings-section-body">
+          <div class="form-row">
+            <label for="apiKeyInput">API Key</label>
+            <input type="password" id="apiKeyInput" placeholder="AIza..." autocomplete="off">
+          </div>
+          <label class="checkbox-label">
+            <input type="checkbox" id="saveApiKey" checked>
+            この端末に保存
+          </label>
+          <div class="form-row">
+            <label for="modelSelect">モデル</label>
+            <select id="modelSelect">
+              <option value="">（モデル一覧を取得してください）</option>
+            </select>
+          </div>
+          <button id="fetchModelsBtn" class="btn btn-secondary">モデル一覧を取得</button>
+          <button id="deleteApiKeyBtn" class="btn btn-danger-outline">APIキーを削除</button>
+        </div>
+      </details>
+
+      <details class="settings-section" id="gasSettings">
+        <summary>Googleドライブ連携（GAS）</summary>
+        <div class="settings-section-body">
+          <p class="hint">Google Apps Script をウェブアプリとして公開した URL を設定します。解析・修正後の JSON がドライブに保存されます。</p>
+          <div class="form-row">
+            <label for="gasUrlInput">GAS Web App URL</label>
+            <input type="url" id="gasUrlInput" placeholder="https://script.google.com/macros/s/.../exec">
+          </div>
+          <div class="btn-row">
+            <button id="saveGasBtn" class="btn btn-secondary">URLを保存</button>
+            <button id="deleteGasBtn" class="btn btn-danger-outline">URLを削除</button>
+          </div>
+        </div>
+      </details>
+
+      <details class="settings-section">
+        <summary>カテゴリ一覧</summary>
+        <div class="settings-section-body">
+          <p class="hint">AIが分類に使うカテゴリです（編集不可・参照用）</p>
+          <ul id="categoryList" class="service-list"></ul>
+        </div>
+      </details>
+
+      <details class="settings-section">
+        <summary>このアプリについて</summary>
+        <div class="settings-section-body">
+          <p class="about-text">レシート写真またはテキストメモを Gemini API で解析し、店舗名・日付・品目・金額・カテゴリを抽出します。画面上で誤読を修正してから、Google Apps Script 経由で Google ドライブへ JSON を送信できます。</p>
+          <p class="about-text">APIキーと GAS URL は各端末の localStorage にのみ保存されます。</p>
+        </div>
+      </details>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <p>解析結果は参考です。金額・カテゴリは保存前に必ず確認してください。</p>
+  </footer>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

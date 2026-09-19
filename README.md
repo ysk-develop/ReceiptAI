@@ -54,18 +54,30 @@ UI・構成は [EVCharge-Advisor](https://ysk-develop.github.io/EVCharge-Advisor
 - ローカルファイル（`file://`）では動作しません。GitHub Pages 等の Web サーバー経由で開いてください
 - 古い実装では CORS のため「成功したように見えても Drive に保存されない」ことがありました。最新の `Code.gs` へ更新＆再デプロイしてください
 
+## デスクトップアプリ（PC）
+
+スマホで Drive に溜めた JSON を取り込み、SQLite で蓄積・グラフ表示する Python アプリです。
+
+```powershell
+cd desktop
+python -m pip install -r requirements.txt
+python main.py
+```
+
+詳細は [desktop/README.md](desktop/README.md) を参照。
+
 ## ファイル構成
 
 ```
-├── index.html
+├── index.html              # スマホ PWA
 ├── manifest.json
 ├── service-worker.js
 ├── css/styles.css
 ├── js/
-│   ├── app.js
-│   ├── storage.js
-│   ├── categories.js
-│   └── gemini-api.js
 ├── gas/Code.gs
+├── desktop/                # PC アプリ
+│   ├── main.py
+│   ├── requirements.txt
+│   └── receiptai/
 └── icons/
 ```

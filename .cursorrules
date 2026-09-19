@@ -1,0 +1,81 @@
+エラーが出ないようテストすること。エラーが出た場合は、原因を自己特定し、修正案を出すのではなく直接ファイルを修正すること。
+UIの修正時は、必ず既存のデザインシステムを継承すること。
+エラーが出たら勝手にデバッグして、最終的にテストが通るまでファイルを更新し続けてください。
+
+## PyQt QComboBox スタイル規約
+PyQt5/PyQt6 で QComboBox を使用する場合、OS デフォルトの矢印を使わず、スタイルシートに以下を必ず適用すること。
+CSS の三角形ボーダーテクニックで統一した下向き矢印を描画し、drop-down ボタンは本体と一体的な丸角にする。
+
+```css
+QComboBox::drop-down {
+    width: 30px;
+    border: none;
+    background-color: #f0f0f0;
+    border-top-right-radius: 8px;
+    border-bottom-right-radius: 8px;
+}
+QComboBox::down-arrow {
+    image: none;
+    width: 0;
+    height: 0;
+    border-left: 6px solid #f0f0f0;
+    border-right: 6px solid #f0f0f0;
+    border-top: 8px solid #333;
+}
+```
+
+## PyQt QSpinBox スタイル規約
+PyQt5/PyQt6 で QSpinBox を使用する場合、OS デフォルトの矢印を使わず、スタイルシートに以下を必ず適用すること。
+CSS の三角形ボーダーテクニックで統一した上下矢印を描画する。
+
+```css
+QSpinBox::up-button, QSpinBox::down-button {
+    width: 30px;
+    border: none;
+    background-color: #f0f0f0;
+}
+QSpinBox::up-button {
+    border-top-right-radius: 8px;
+}
+QSpinBox::down-button {
+    border-bottom-right-radius: 8px;
+}
+QSpinBox::up-arrow {
+    image: none;
+    width: 0;
+    height: 0;
+    border-left: 5px solid #f0f0f0;
+    border-right: 5px solid #f0f0f0;
+    border-bottom: 7px solid #333;
+}
+QSpinBox::down-arrow {
+    image: none;
+    width: 0;
+    height: 0;
+    border-left: 5px solid #f0f0f0;
+    border-right: 5px solid #f0f0f0;
+    border-top: 7px solid #333;
+}
+```
+
+## PyQt ボタンホバー規約
+PyQt5/PyQt6 で QPushButton を配置する際は、必ず :hover 疑似クラスで背景色が変化するスタイルを定義すること。
+ホバー色は通常時より少し暗い色にする。objectName やスタイルシートで個別に色を指定する場合でも、必ず対応する :hover を併記すること。
+例:
+
+```css
+QPushButton { background-color: #3498db; }
+QPushButton:hover { background-color: #2980b9; }
+```
+
+## PyQt QTableWidget セル編集スタイル規約
+QTableWidget 内のセルを編集可能にする場合、セル編集時に QLineEdit のグローバルスタイル（丸角・パディング・枠線色）が適用されて文字が見切れる問題を防ぐため、以下を必ず適用すること。
+
+```css
+QTableWidget QLineEdit {
+    border: none;
+    border-radius: 0;
+    padding: 2px 4px;
+    background: white;
+}
+```

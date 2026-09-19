@@ -64,7 +64,7 @@ python -m pip install -r requirements.txt
 python main.py
 ```
 
-詳細は [desktop/README.md](desktop/README.md) を参照。
+PyQt6 製。詳細は [desktop/README.md](desktop/README.md) を参照。
 
 ## ファイル構成
 

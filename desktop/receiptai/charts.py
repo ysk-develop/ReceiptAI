@@ -1,4 +1,4 @@
-"""Matplotlib chart helpers for CustomTkinter embedding."""
+"""Matplotlib chart helpers for Qt embedding."""
 
 from __future__ import annotations
 
@@ -6,12 +6,11 @@ from typing import Sequence
 
 import matplotlib
 
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+matplotlib.use("QtAgg")
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
+import matplotlib.pyplot as plt
 
-# Teal palette aligned with web PWA
 PRIMARY = "#0f766e"
 ACCENT = "#14b8a6"
 MUTED = "#5f8a85"
@@ -33,7 +32,6 @@ def setup_japanese_font() -> None:
         "Yu Gothic",
         "Meiryo",
         "MS Gothic",
-        "Hiragino Sans",
         "DejaVu Sans",
     ]
     plt.rcParams["axes.unicode_minus"] = False
@@ -41,7 +39,7 @@ def setup_japanese_font() -> None:
 
 def make_category_pie(pairs: Sequence[tuple[str, float]]) -> Figure:
     setup_japanese_font()
-    fig = Figure(figsize=(5.2, 3.6), dpi=100, facecolor="#f0fdfa")
+    fig = Figure(figsize=(5.0, 3.4), dpi=100, facecolor="#f0fdfa")
     ax = fig.add_subplot(111)
     ax.set_facecolor("#f0fdfa")
     if not pairs:
@@ -50,12 +48,11 @@ def make_category_pie(pairs: Sequence[tuple[str, float]]) -> Figure:
         return fig
     labels = [p[0] for p in pairs]
     sizes = [p[1] for p in pairs]
-    colors = COLORS[: len(labels)]
     ax.pie(
         sizes,
         labels=labels,
         autopct=lambda pct: f"{pct:.0f}%" if pct >= 5 else "",
-        colors=colors,
+        colors=COLORS[: len(labels)],
         startangle=90,
         textprops={"fontsize": 8, "color": "#134e4a"},
     )
@@ -66,7 +63,7 @@ def make_category_pie(pairs: Sequence[tuple[str, float]]) -> Figure:
 
 def make_monthly_bars(pairs: Sequence[tuple[str, float]]) -> Figure:
     setup_japanese_font()
-    fig = Figure(figsize=(5.2, 3.6), dpi=100, facecolor="#f0fdfa")
+    fig = Figure(figsize=(5.0, 3.4), dpi=100, facecolor="#f0fdfa")
     ax = fig.add_subplot(111)
     ax.set_facecolor("#ffffff")
     if not pairs:
@@ -87,8 +84,5 @@ def make_monthly_bars(pairs: Sequence[tuple[str, float]]) -> Figure:
     return fig
 
 
-def embed_figure(parent, fig: Figure) -> FigureCanvasTkAgg:
-    canvas = FigureCanvasTkAgg(fig, master=parent)
-    canvas.draw()
-    canvas.get_tk_widget().pack(fill="both", expand=True)
-    return canvas
+def canvas_from_figure(fig: Figure) -> FigureCanvasQTAgg:
+    return FigureCanvasQTAgg(fig)

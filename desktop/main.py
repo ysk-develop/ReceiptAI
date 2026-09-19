@@ -1,4 +1,4 @@
-"""Launch ReceiptAI desktop app."""
+"""Launch ReceiptAI desktop app (PyQt6)."""
 
 from receiptai.app import run
 

@@ -3,7 +3,7 @@ import {
   getModels, setModels, getGasUrl, setGasUrl
 } from './storage.js';
 import { CATEGORIES, normalizeCategory } from './categories.js';
-import { fetchModels, analyzeReceipt, sendToGas } from './gemini-api.js';
+import { fetchModels, analyzeReceipt, sendToGas, pingGas } from './gemini-api.js';
 
 let imageData = null;
 let imageMime = 'image/jpeg';
@@ -305,16 +305,64 @@ async function handleSend() {
   $('sendBtn').textContent = '送信中...';
 
   try {
-    await sendToGas(gasUrl, payload);
+    const result = await sendToGas(gasUrl, payload);
     setGasUrl(gasUrl);
-    showMessage('Googleドライブへ送信しました（no-corsのため応答は確認できません）', 'success');
-    handleClear();
+
+    if (result.verified) {
+      const folder = result.result?.folderName || 'ReceiptAI';
+      const file = result.result?.fileName || '';
+      showMessage(`保存成功: ${folder} / ${file}`, 'success');
+      handleClear();
+    } else {
+      showMessage(
+        `送信しましたが、結果を確認できませんでした。\nGoogleドライブの「ReceiptAI」フォルダを見てください。\n無い場合は GAS の Code.gs を更新して新バージョン再デプロイ＆アクセス「全員」にしてください。`,
+        'error'
+      );
+    }
   } catch (err) {
     showMessage(`送信エラー: ${err.message}`);
   } finally {
     $('sendBtn').disabled = false;
     $('sendBtn').textContent = '☁ Googleドライブへ保存';
   }
+}
+
+async function handleTestGas() {
+  clearMessage();
+  const gasUrl = $('gasUrlInput').value.trim() || getGasUrl();
+  const out = $('gasTestResult');
+  if (!gasUrl) {
+    showMessage('先にGAS URLを入力してください');
+    return;
+  }
+
+  $('testGasBtn').disabled = true;
+  $('testGasBtn').textContent = 'テスト中...';
+  out.textContent = '接続確認中…';
+
+  try {
+    const result = await pingGas(gasUrl);
+    out.textContent = result.message;
+    if (result.ok) {
+      setGasUrl(normalizeUrlKeep(gasUrl));
+      showMessage(result.message, 'success');
+    } else if (result.corsBlocked && result.checkUrl) {
+      showMessage('CORSのため自動判定できません。確認用URLを開きます', 'error');
+      window.open(result.checkUrl, '_blank', 'noopener');
+    } else {
+      showMessage(result.message, 'error');
+    }
+  } catch (err) {
+    out.textContent = err.message;
+    showMessage(err.message);
+  } finally {
+    $('testGasBtn').disabled = false;
+    $('testGasBtn').textContent = '接続テスト';
+  }
+}
+
+function normalizeUrlKeep(url) {
+  return String(url || '').trim().replace(/\/$/, '');
 }
 
 async function handleFetchModels() {
@@ -367,10 +415,13 @@ function initGasActions() {
     showMessage('GAS URLを保存しました', 'success');
   });
 
+  $('testGasBtn').addEventListener('click', handleTestGas);
+
   $('deleteGasBtn').addEventListener('click', () => {
     if (!confirm('GAS URLをこの端末から削除しますか？')) return;
     setGasUrl('');
     $('gasUrlInput').value = '';
+    $('gasTestResult').textContent = '';
     showMessage('GAS URLを削除しました', 'success');
   });
 }

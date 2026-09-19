@@ -36,17 +36,23 @@ UI・構成は [EVCharge-Advisor](https://ysk-develop.github.io/EVCharge-Advisor
 ## Google Apps Script の準備
 
 1. [Google Apps Script](https://script.google.com/) で新規プロジェクトを作成
-2. `gas/Code.gs` の内容を貼り付け、フォルダ ID を自分のドライブに合わせて変更
+2. `gas/Code.gs` の内容を貼り付け（`FOLDER_ID` は空のままでOK → My Drive に「ReceiptAI」フォルダを自動作成）
 3. **デプロイ** → **新しいデプロイ** → 種類: ウェブアプリ
-4. 実行ユーザー: 自分 / アクセスできるユーザー: 全員
-5. 発行された URL をアプリの設定に保存
+4. 実行ユーザー: 自分 / アクセスできるユーザー: **全員**（「Googleアカウントを持つユーザー」ではない）
+5. 発行された URL（末尾 `/exec`）をアプリの設定に保存
+6. コード変更後は必ず **デプロイを管理 → 編集 → 新バージョン** で再デプロイ
+
+動作確認:
+- ブラウザで `https://script.google.com/macros/s/.../exec?ping=1` を開く
+- `{"status":"ok","folderName":"ReceiptAI",...}` と出ればOK
+- エディタで `testWrite` を実行するとテストファイルが1つ作られます
 
 ## 注意
 
 - 解析結果は参考です。保存前に金額・カテゴリを確認してください
 - APIキーは localStorage に保存されます（端末・ブラウザごとに独立）
 - ローカルファイル（`file://`）では動作しません。GitHub Pages 等の Web サーバー経由で開いてください
-- GAS への送信は CORS 制約のため `no-cors` を使用します（ブラウザ上では応答本文は読めません）
+- 古い実装では CORS のため「成功したように見えても Drive に保存されない」ことがありました。最新の `Code.gs` へ更新＆再デプロイしてください
 
 ## ファイル構成
 

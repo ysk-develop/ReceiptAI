@@ -113,15 +113,96 @@ export async function analyzeReceipt(apiKey, model, { base64Data, mimeType, memo
   }
 }
 
+function normalizeGasUrl(url) {
+  const u = String(url || '').trim();
+  if (!u) throw new Error('GAS URLが空です');
+  if (!/script\.google\.com\/macros\/s\//.test(u)) {
+    throw new Error('GASのウェブアプリURL（script.google.com/macros/s/.../exec）を指定してください');
+  }
+  // /dev は自分のログイン時のみ。スマホから使うなら /exec が必須
+  if (u.includes('/dev')) {
+    throw new Error('URLが /dev です。デプロイ後の /exec のURLを使ってください');
+  }
+  return u.replace(/\/$/, '');
+}
+
 /**
- * Send confirmed receipt JSON to Google Apps Script web app.
- * Uses no-cors so opaque responses are expected on success.
+ * Ping GAS (doGet?ping=1). Opens in a way that works despite CORS:
+ * returns { ok, message, raw? } — may ask user to open URL manually.
+ */
+export async function pingGas(gasUrl) {
+  const url = `${normalizeGasUrl(gasUrl)}?ping=1`;
+  try {
+    const res = await fetch(url, { method: 'GET', redirect: 'follow' });
+    const text = await res.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      throw new Error(`応答がJSONではありません: ${text.slice(0, 120)}`);
+    }
+    if (data.status === 'ok') {
+      return {
+        ok: true,
+        message: `接続OK / 保存先: ${data.folderName || 'ReceiptAI'}`,
+        data,
+        checkUrl: url
+      };
+    }
+    return { ok: false, message: data.message || 'ping失敗', data, checkUrl: url };
+  } catch (err) {
+    // CORSで読めない場合でもスクリプト自体は生きていることがある
+    return {
+      ok: false,
+      corsBlocked: true,
+      message: `ブラウザから応答を読めませんでした（CORS）。次のURLをSafariで開いて {"status":"ok"} と出るか確認してください。\n${url}`,
+      checkUrl: url,
+      error: String(err.message || err)
+    };
+  }
+}
+
+/**
+ * Send receipt JSON to GAS.
+ * Prefer cors+readable response; fall back to form-encoded POST.
+ * Returns { verified: boolean, result?: object, warning?: string }
  */
 export async function sendToGas(gasUrl, payload) {
-  await fetch(gasUrl, {
-    method: 'POST',
-    mode: 'no-cors',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify(payload)
-  });
+  const url = normalizeGasUrl(gasUrl);
+  const bodyText = JSON.stringify(payload);
+
+  // 1) text/plain POST（プリフライト無し）。成功時は JSON が読めることもある
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      redirect: 'follow',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: bodyText
+    });
+    const text = await res.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      throw new Error(`応答不正: ${text.slice(0, 150)}`);
+    }
+    if (data.status === 'error') {
+      throw new Error(data.message || 'GAS側でエラー');
+    }
+    return { verified: true, result: data };
+  } catch (err) {
+    // 2) CORSで読めない場合: form POST（no-cors）。サーバー側は動くことが多いが検証不可
+    const form = new URLSearchParams();
+    form.set('data', bodyText);
+    await fetch(url, {
+      method: 'POST',
+      mode: 'no-cors',
+      body: form
+    });
+    return {
+      verified: false,
+      warning: String(err.message || err),
+      hint: '送信リクエストは送りました。My Drive の「ReceiptAI」フォルダを確認してください。無い場合は GAS を新バージョンで再デプロイし、アクセスを「全員」にしてください。'
+    };
+  }
 }

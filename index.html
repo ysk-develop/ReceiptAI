@@ -117,15 +117,17 @@
       <details class="settings-section" id="gasSettings">
         <summary>Googleドライブ連携（GAS）</summary>
         <div class="settings-section-body">
-          <p class="hint">Google Apps Script をウェブアプリとして公開した URL を設定します。解析・修正後の JSON がドライブに保存されます。</p>
+          <p class="hint">末尾が <code>/exec</code> のウェブアプリURLを設定します。GASの Code.gs を最新にして「新バージョン」で再デプロイし、アクセスは「全員」にしてください。フォルダID未設定なら My Drive に「ReceiptAI」フォルダが自動作成されます。</p>
           <div class="form-row">
             <label for="gasUrlInput">GAS Web App URL</label>
             <input type="url" id="gasUrlInput" placeholder="https://script.google.com/macros/s/.../exec">
           </div>
           <div class="btn-row">
             <button id="saveGasBtn" class="btn btn-secondary">URLを保存</button>
-            <button id="deleteGasBtn" class="btn btn-danger-outline">URLを削除</button>
+            <button id="testGasBtn" class="btn btn-secondary">接続テスト</button>
           </div>
+          <button id="deleteGasBtn" class="btn btn-danger-outline">URLを削除</button>
+          <p id="gasTestResult" class="hint" style="margin-top:0.75rem;white-space:pre-wrap"></p>
         </div>
       </details>
 

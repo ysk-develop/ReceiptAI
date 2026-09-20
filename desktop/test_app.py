@@ -124,6 +124,11 @@ class DesktopAppTests(unittest.TestCase):
         c2 = charts.canvas_from_figure(charts.make_monthly_bars([("2026-09", 100)]))
         self.assertIsNotNone(c1)
         self.assertIsNotNone(c2)
+        # 端数調整のマイナスでも落ちない
+        c3 = charts.canvas_from_figure(
+            charts.make_category_pie([("食費", 100), ("その他", -50)])
+        )
+        self.assertIsNotNone(c3)
 
     @patch.object(QMessageBox, "information", return_value=QMessageBox.StandardButton.Ok)
     @patch.object(QMessageBox, "warning", return_value=QMessageBox.StandardButton.Ok)

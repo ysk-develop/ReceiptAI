@@ -42,12 +42,14 @@ def make_category_pie(pairs: Sequence[tuple[str, float]]) -> Figure:
     fig = Figure(figsize=(5.0, 3.4), dpi=100, facecolor="#f0fdfa")
     ax = fig.add_subplot(111)
     ax.set_facecolor("#f0fdfa")
-    if not pairs:
+    # 端数調整などでマイナスがあり得る。円グラフは正の値のみ
+    positive = [(str(name), float(val)) for name, val in pairs if float(val) > 0]
+    if not positive:
         ax.text(0.5, 0.5, "データがありません", ha="center", va="center", color=MUTED)
         ax.axis("off")
         return fig
-    labels = [p[0] for p in pairs]
-    sizes = [p[1] for p in pairs]
+    labels = [p[0] for p in positive]
+    sizes = [p[1] for p in positive]
     ax.pie(
         sizes,
         labels=labels,
@@ -72,8 +74,9 @@ def make_monthly_bars(pairs: Sequence[tuple[str, float]]) -> Figure:
         ax.set_yticks([])
         return fig
     labels = [p[0] for p in pairs]
-    values = [p[1] for p in pairs]
-    ax.bar(labels, values, color=ACCENT, edgecolor=PRIMARY, linewidth=0.5)
+    values = [float(p[1]) for p in pairs]
+    colors = [ACCENT if v >= 0 else "#f87171" for v in values]
+    ax.bar(labels, values, color=colors, edgecolor=PRIMARY, linewidth=0.5)
     ax.set_title("月別支出", color=PRIMARY, fontsize=11, fontweight="bold")
     ax.tick_params(axis="x", labelrotation=45, labelsize=8)
     ax.tick_params(axis="y", labelsize=8)

@@ -370,13 +370,14 @@ def list_receipts(
 ) -> list[dict[str, Any]]:
     with get_conn(db_path) as conn:
         if year_month:
+            ym = year_month.strip().replace("/", "-")[:7]
             rows = conn.execute(
                 """
                 SELECT * FROM receipts
-                WHERE date LIKE ?
+                WHERE replace(substr(date, 1, 7), '/', '-') = ?
                 ORDER BY date DESC, id DESC
                 """,
-                (f"{year_month}%",),
+                (ym,),
             ).fetchall()
         else:
             rows = conn.execute(
@@ -403,7 +404,7 @@ def list_months(db_path: Path | None = None) -> list[str]:
     with get_conn(db_path) as conn:
         rows = conn.execute(
             """
-            SELECT DISTINCT substr(date, 1, 7) AS ym
+            SELECT DISTINCT replace(substr(date, 1, 7), '/', '-') AS ym
             FROM receipts
             WHERE length(date) >= 7
             ORDER BY ym DESC
@@ -418,16 +419,17 @@ def category_totals(
 ) -> list[tuple[str, float]]:
     with get_conn(db_path) as conn:
         if year_month:
+            ym = year_month.strip().replace("/", "-")[:7]
             rows = conn.execute(
                 """
                 SELECT i.category, SUM(i.price) AS total
                 FROM items i
                 JOIN receipts r ON r.id = i.receipt_id
-                WHERE r.date LIKE ?
+                WHERE replace(substr(r.date, 1, 7), '/', '-') = ?
                 GROUP BY i.category
                 ORDER BY total DESC
                 """,
-                (f"{year_month}%",),
+                (ym,),
             ).fetchall()
         else:
             rows = conn.execute(
@@ -445,7 +447,7 @@ def monthly_totals(db_path: Path | None = None) -> list[tuple[str, float]]:
     with get_conn(db_path) as conn:
         rows = conn.execute(
             """
-            SELECT substr(date, 1, 7) AS ym, SUM(total_amount) AS total
+            SELECT replace(substr(date, 1, 7), '/', '-') AS ym, SUM(total_amount) AS total
             FROM receipts
             WHERE length(date) >= 7
             GROUP BY ym
@@ -460,15 +462,16 @@ def export_csv(path: Path, year_month: str | None = None, db_path: Path | None =
 
     with get_conn(db_path) as conn:
         if year_month:
+            ym = year_month.strip().replace("/", "-")[:7]
             rows = conn.execute(
                 """
                 SELECT r.date, r.shop_name, i.name, i.price, i.category, r.id
                 FROM items i
                 JOIN receipts r ON r.id = i.receipt_id
-                WHERE r.date LIKE ?
+                WHERE replace(substr(r.date, 1, 7), '/', '-') = ?
                 ORDER BY r.date, r.id, i.id
                 """,
-                (f"{year_month}%",),
+                (ym,),
             ).fetchall()
         else:
             rows = conn.execute(

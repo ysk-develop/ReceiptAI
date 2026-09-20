@@ -636,8 +636,19 @@ class MainWindow(QMainWindow):
 
         ym = self.chart_month_combo.currentText()
         year_month = None if ym == "すべて" else ym
-        pie = charts.canvas_from_figure(charts.make_category_pie(db.category_totals(year_month)))
-        bar = charts.canvas_from_figure(charts.make_monthly_bars(db.monthly_totals()))
+        try:
+            pie = charts.canvas_from_figure(
+                charts.make_category_pie(db.category_totals(year_month))
+            )
+            bar = charts.canvas_from_figure(charts.make_monthly_bars(db.monthly_totals()))
+        except Exception as exc:  # noqa: BLE001
+            # Never block app startup / tab switch on chart errors
+            err = QLabel(f"グラフを描画できませんでした\n{exc}")
+            err.setObjectName("Muted")
+            err.setWordWrap(True)
+            self.pie_layout.addWidget(err)
+            self._chart_widgets.append(err)
+            return
         self.pie_layout.addWidget(pie)
         self.bar_layout.addWidget(bar)
         self._chart_widgets.extend([pie, bar])

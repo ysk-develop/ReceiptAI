@@ -23,7 +23,8 @@ LINE_SCHEMA = {
         "date": {"type": "string"},
         "total_amount": {"type": "number"},
         "name": {"type": "string"},
-        "price": {"type": "number"},
+        "price": {"type": "number", "description": "印字の個別金額（税抜が多い）"},
+        "tax_rate_type": {"type": "string", "description": "standard or reduced"},
         "category": {"type": "string"},
     },
     "required": [
@@ -33,6 +34,7 @@ LINE_SCHEMA = {
         "total_amount",
         "name",
         "price",
+        "tax_rate_type",
         "category",
     ],
 }
@@ -108,6 +110,7 @@ def normalize_analysis_result(parsed: dict[str, Any], today: str) -> list[dict[s
                 {
                     "name": name or "（未入力）",
                     "price": price,
+                    "tax_rate_type": "reduced" if line.get("tax_rate_type") == "reduced" else "standard",
                     "category": str(line.get("category") or "その他"),
                 }
             )
@@ -191,7 +194,8 @@ def analyze_receipt(
 - 左右に並ぶレシートはすべて別番号 (1,2,3...)。同じ店でも紙が別なら別番号。
 - lines に全レシートの全品目を漏れなく出す。1枚分だけの出力は誤り（1枚しかない場合を除く）。
 
-【金額】price と total_amount は税込。小計・税・合計行は lines に入れない。
+【金額】price は印字どおり（税抜が多い）。tax_rate_type は軽減なら reduced、それ以外は standard。
+total_amount はレシート税込合計（参考）。小計・税・合計行は lines に入れない。
 カテゴリ: [{cats}]
 日付不明のみ {today}。JSONのみ。"""
     if memo.strip():

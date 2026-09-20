@@ -1,4 +1,4 @@
-const CACHE_NAME = 'receipt-ai-v5';
+const CACHE_NAME = 'receipt-ai-v6';
 const ASSETS = [
   './',
   './index.html',
@@ -9,6 +9,7 @@ const ASSETS = [
   './js/categories.js',
   './js/gemini-api.js',
   './js/image-util.js',
+  './js/tax.js',
   './icons/icon-192.png',
   './icons/icon-512.png'
 ];

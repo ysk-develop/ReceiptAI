@@ -114,7 +114,10 @@ class DesktopAppTests(unittest.TestCase):
         win._add_item_row("お茶", 100, "食費")
         self.assertEqual(win.items_table.rowCount(), 1)
         items = win._collect_items()
-        self.assertEqual(items[0]["price"], 100)
+        self.assertEqual(items[0]["price_excl"], 100)
+        self.assertEqual(items[0]["price"], 110)  # 10% 外税
+        raw = win._collect_items_raw()
+        self.assertEqual(raw[0]["price"], 100)
         win.save_receipt()
         self.assertIsNotNone(win._selected_id)
         win.open_receipt(win._selected_id)

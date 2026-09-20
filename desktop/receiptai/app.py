@@ -35,6 +35,7 @@ from . import charts, db, gas_client, gemini, importer, sheets_sync
 from .config import CATEGORIES, DB_PATH, load_config, save_config
 from .image_util import resize_to_jpeg_base64
 from .styles import APP_STYLESHEET
+from .tax_util import calc_inclusive, normalize_rate_type
 
 
 def _btn(text: str, object_name: str | None = None) -> QPushButton:
@@ -265,13 +266,15 @@ class MainWindow(QMainWindow):
         title.setObjectName("SectionTitle")
         iv.addWidget(title)
 
-        self.items_table = QTableWidget(0, 4)
-        self.items_table.setHorizontalHeaderLabels(["品目", "金額", "カテゴリ", ""])
+        self.items_table = QTableWidget(0, 6)
+        self.items_table.setHorizontalHeaderLabels(["品目", "税抜", "税率", "税込", "カテゴリ", ""])
         self.items_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.items_table.verticalHeader().setVisible(False)
-        self.items_table.setColumnWidth(1, 110)
-        self.items_table.setColumnWidth(2, 150)
-        self.items_table.setColumnWidth(3, 48)
+        self.items_table.setColumnWidth(1, 80)
+        self.items_table.setColumnWidth(2, 100)
+        self.items_table.setColumnWidth(3, 80)
+        self.items_table.setColumnWidth(4, 120)
+        self.items_table.setColumnWidth(5, 48)
         self.items_table.itemChanged.connect(self._on_item_changed)
         iv.addWidget(self.items_table, 1)
 
@@ -279,7 +282,7 @@ class MainWindow(QMainWindow):
         add_btn = _btn("+ 行追加", "SecondaryButton")
         add_btn.clicked.connect(lambda: self._add_item_row())
         bottom.addWidget(add_btn)
-        self.edit_total = QLabel("合計 0 円")
+        self.edit_total = QLabel("税込合計 0 円")
         self.edit_total.setObjectName("SectionTitle")
         bottom.addWidget(self.edit_total)
         bottom.addStretch(1)
@@ -301,7 +304,13 @@ class MainWindow(QMainWindow):
         self.items_table.blockSignals(False)
         self._recalc_total()
 
-    def _add_item_row(self, name: str = "", price: float | int | str = 0, category: str = "食費") -> None:
+    def _add_item_row(
+        self,
+        name: str = "",
+        price: float | int | str = 0,
+        category: str = "食費",
+        tax_rate_type: str = "",
+    ) -> None:
         self.items_table.blockSignals(True)
         row = self.items_table.rowCount()
         self.items_table.insertRow(row)
@@ -316,18 +325,35 @@ class MainWindow(QMainWindow):
         spin.valueChanged.connect(self._recalc_total)
         self.items_table.setCellWidget(row, 1, spin)
 
+        rate_type = normalize_rate_type(
+            tax_rate_type or self.cfg.get("tax_default_rate_type"),
+            self.cfg.get("tax_default_rate_type") or "standard",
+        )
+        tax_combo = QComboBox()
+        std = self.cfg.get("tax_standard_rate", 10)
+        red = self.cfg.get("tax_reduced_rate", 8)
+        tax_combo.addItem(f"標準{std}%", "standard")
+        tax_combo.addItem(f"軽減{red}%", "reduced")
+        tax_combo.setCurrentIndex(1 if rate_type == "reduced" else 0)
+        tax_combo.currentIndexChanged.connect(self._recalc_total)
+        self.items_table.setCellWidget(row, 2, tax_combo)
+
+        incl_item = QTableWidgetItem("0")
+        incl_item.setFlags(incl_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        self.items_table.setItem(row, 3, incl_item)
+
         combo = QComboBox()
         combo.addItems(CATEGORIES)
         if category in CATEGORIES:
             combo.setCurrentText(category)
         else:
             combo.setCurrentText("その他")
-        self.items_table.setCellWidget(row, 2, combo)
+        self.items_table.setCellWidget(row, 4, combo)
 
         rm = _btn("✕", "GhostDangerButton")
         rm.setFixedWidth(36)
         rm.clicked.connect(lambda _=False, r=row: self._remove_item_row_by_button())
-        self.items_table.setCellWidget(row, 3, rm)
+        self.items_table.setCellWidget(row, 5, rm)
         self.items_table.blockSignals(False)
         self._recalc_total()
 
@@ -336,7 +362,7 @@ class MainWindow(QMainWindow):
         if btn is None:
             return
         for row in range(self.items_table.rowCount()):
-            if self.items_table.cellWidget(row, 3) is btn:
+            if self.items_table.cellWidget(row, 5) is btn:
                 self.items_table.removeRow(row)
                 self._recalc_total()
                 return
@@ -344,22 +370,57 @@ class MainWindow(QMainWindow):
     def _on_item_changed(self, _item: QTableWidgetItem) -> None:
         self._recalc_total()
 
-    def _collect_items(self) -> list[dict]:
+    def _collect_items_raw(self) -> list[dict]:
         items = []
         for row in range(self.items_table.rowCount()):
             name_item = self.items_table.item(row, 0)
             name = name_item.text().strip() if name_item else ""
             spin = self.items_table.cellWidget(row, 1)
-            price = int(spin.value()) if isinstance(spin, QSpinBox) else 0
-            combo = self.items_table.cellWidget(row, 2)
-            cat = combo.currentText() if isinstance(combo, QComboBox) else "その他"
-            if name or price:
-                items.append({"name": name or "（未入力）", "price": float(price), "category": cat})
+            price_excl = int(spin.value()) if isinstance(spin, QSpinBox) else 0
+            tax_combo = self.items_table.cellWidget(row, 2)
+            rate_type = "standard"
+            if isinstance(tax_combo, QComboBox):
+                rate_type = tax_combo.currentData() or "standard"
+            cat_combo = self.items_table.cellWidget(row, 4)
+            cat = cat_combo.currentText() if isinstance(cat_combo, QComboBox) else "その他"
+            if name or price_excl:
+                items.append(
+                    {
+                        "name": name or "（未入力）",
+                        "price": price_excl,
+                        "price_excl": price_excl,
+                        "tax_rate_type": rate_type,
+                        "category": cat,
+                    }
+                )
         return items
 
+    def _collect_items(self) -> list[dict]:
+        """税込 price で返す（保存・合計用）."""
+        out = []
+        for it in self._collect_items_raw():
+            conv = calc_inclusive(it["price_excl"], it["tax_rate_type"], self.cfg)
+            out.append(
+                {
+                    "name": it["name"],
+                    "price": float(conv["incl"]),
+                    "price_excl": it["price_excl"],
+                    "tax_rate": conv["rate"],
+                    "tax_rate_type": it["tax_rate_type"],
+                    "category": it["category"],
+                }
+            )
+        return out
+
     def _recalc_total(self) -> None:
-        total = sum(i["price"] for i in self._collect_items())
-        self.edit_total.setText(f"合計 {total:,.0f} 円")
+        items = self._collect_items()
+        for row, it in enumerate(self._collect_items_raw()):
+            conv = calc_inclusive(it["price_excl"], it["tax_rate_type"], self.cfg)
+            cell = self.items_table.item(row, 3)
+            if cell:
+                cell.setText(f'{int(conv["incl"]):,}')
+        total = sum(i["price"] for i in items)
+        self.edit_total.setText(f"税込合計 {total:,.0f} 円")
 
     def new_receipt(self) -> None:
         self._selected_id = None
@@ -379,7 +440,7 @@ class MainWindow(QMainWindow):
         self.date_edit.setText(data["date"])
         self._clear_items()
         for it in data["items"]:
-            self._add_item_row(it["name"], it["price"], it["category"])
+            self._add_item_row(it["name"], it["price"], it["category"], it.get("tax_rate_type", ""))
         if not data["items"]:
             self._add_item_row()
         self.tabs.setCurrentIndex(1)
@@ -582,13 +643,13 @@ class MainWindow(QMainWindow):
         i = self._analysis_index
         if i < 0 or i >= len(self._analyzed_receipts):
             return
-        items = self._collect_items()
+        items = self._collect_items_raw()
         self._analyzed_receipts[i] = {
             **self._analyzed_receipts[i],
             "shop_name": self.shop_edit.text().strip() or "不明",
             "date": self.date_edit.text().strip() or date.today().isoformat(),
             "items": items,
-            "total_amount": sum(x["price"] for x in items),
+            "total_amount": self._analyzed_receipts[i].get("total_amount") or 0,
         }
 
     def _load_analyzed_receipt(self, index: int) -> None:
@@ -600,7 +661,12 @@ class MainWindow(QMainWindow):
         self.date_edit.setText(str(r.get("date") or date.today().isoformat()))
         self._clear_items()
         for it in r.get("items") or []:
-            self._add_item_row(it.get("name", ""), it.get("price", 0), it.get("category", "その他"))
+            self._add_item_row(
+                it.get("name", ""),
+                it.get("price", 0),
+                it.get("category", "その他"),
+                it.get("tax_rate_type", ""),
+            )
         if self.items_table.rowCount() == 0:
             self._add_item_row()
         if self.receipt_combo.currentIndex() != index:
@@ -658,6 +724,38 @@ class MainWindow(QMainWindow):
         self.archive_check.setChecked(bool(self.cfg.get("archive_imported", True)))
         v.addWidget(self.archive_check)
 
+        t_tax = QLabel("消費税設定")
+        t_tax.setObjectName("SectionTitle")
+        v.addWidget(t_tax)
+        hint_tax = QLabel("税抜の個別金額に対し、設定税率で税込を自動計算します（初期は税額切り捨て）。")
+        hint_tax.setObjectName("Muted")
+        hint_tax.setWordWrap(True)
+        v.addWidget(hint_tax)
+        tax_row = QHBoxLayout()
+        self.tax_std = QSpinBox()
+        self.tax_std.setRange(0, 100)
+        self.tax_std.setValue(int(self.cfg.get("tax_standard_rate") or 10))
+        self.tax_red = QSpinBox()
+        self.tax_red.setRange(0, 100)
+        self.tax_red.setValue(int(self.cfg.get("tax_reduced_rate") or 8))
+        tax_row.addWidget(QLabel("標準%"))
+        tax_row.addWidget(self.tax_std)
+        tax_row.addWidget(QLabel("軽減%"))
+        tax_row.addWidget(self.tax_red)
+        v.addLayout(tax_row)
+        self.tax_default = QComboBox()
+        self.tax_default.addItem("初期=標準税率", "standard")
+        self.tax_default.addItem("初期=軽減税率", "reduced")
+        if self.cfg.get("tax_default_rate_type") == "reduced":
+            self.tax_default.setCurrentIndex(1)
+        v.addWidget(self.tax_default)
+        self.tax_round = QComboBox()
+        self.tax_round.addItem("税額切り捨て", "floor")
+        self.tax_round.addItem("四捨五入", "round")
+        if self.cfg.get("tax_rounding") == "round":
+            self.tax_round.setCurrentIndex(1)
+        v.addWidget(self.tax_round)
+
         t2 = QLabel("Gemini API")
         t2.setObjectName("SectionTitle")
         v.addWidget(t2)
@@ -699,7 +797,12 @@ class MainWindow(QMainWindow):
         self.cfg["gemini_api_key"] = self.api_edit.text().strip()
         self.cfg["gemini_model"] = self.model_combo.currentText().strip()
         self.cfg["archive_imported"] = self.archive_check.isChecked()
+        self.cfg["tax_standard_rate"] = int(self.tax_std.value())
+        self.cfg["tax_reduced_rate"] = int(self.tax_red.value())
+        self.cfg["tax_default_rate_type"] = self.tax_default.currentData() or "standard"
+        self.cfg["tax_rounding"] = self.tax_round.currentData() or "floor"
         save_config(self.cfg)
+        self._recalc_total()
         QMessageBox.information(self, "設定", "保存しました")
 
     def test_gas(self) -> None:

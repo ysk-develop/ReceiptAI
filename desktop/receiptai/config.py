@@ -15,6 +15,10 @@ DEFAULT_CONFIG = {
     "gemini_api_key": "",
     "gemini_model": "gemini-2.0-flash",
     "archive_imported": True,
+    "tax_standard_rate": 10,
+    "tax_reduced_rate": 8,
+    "tax_default_rate_type": "standard",
+    "tax_rounding": "floor",
 }
 
 CATEGORIES = [

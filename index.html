@@ -77,10 +77,12 @@
             </div>
           </div>
 
-          <p class="hint" style="margin-top:0.75rem">明細一覧（タップして修正できます）</p>
+          <p class="hint" style="margin-top:0.75rem">明細（税抜→設定税率で税込換算）。税率は行ごとに変更できます。</p>
           <div class="item-head">
             <span>品目</span>
-            <span>金額</span>
+            <span>税抜</span>
+            <span>税率</span>
+            <span>税込</span>
             <span>カテゴリ</span>
             <span></span>
           </div>
@@ -88,9 +90,10 @@
           <button id="addItemBtn" class="btn btn-secondary btn-sm">+ 明細行を追加</button>
 
           <div class="total-box">
-            <span>合計金額</span>
+            <span>税込合計（換算）</span>
             <span id="totalPrice" class="total-price">0 円</span>
           </div>
+          <p id="receiptTotalHint" class="hint"></p>
 
           <button id="sendBtn" class="btn btn-success">☁ このレシートをシートへ保存</button>
           <button id="sendAllBtn" class="btn btn-secondary hidden">☁ 検出した全レシートを保存</button>
@@ -132,6 +135,38 @@
           </div>
           <button id="fetchModelsBtn" class="btn btn-secondary">モデル一覧を取得</button>
           <button id="deleteApiKeyBtn" class="btn btn-danger-outline">APIキーを削除</button>
+        </div>
+      </details>
+
+      <details class="settings-section" id="taxSettings">
+        <summary>消費税設定</summary>
+        <div class="settings-section-body">
+          <p class="hint">レシートの個別金額が税抜のとき、ここで設定した税率で税込を自動計算します（税額は切り捨てが初期値）。</p>
+          <div class="form-grid">
+            <div class="form-row">
+              <label for="taxStandard">標準税率（%）</label>
+              <input type="number" id="taxStandard" min="0" max="100" step="0.1" value="10">
+            </div>
+            <div class="form-row">
+              <label for="taxReduced">軽減税率（%）</label>
+              <input type="number" id="taxReduced" min="0" max="100" step="0.1" value="8">
+            </div>
+          </div>
+          <div class="form-row">
+            <label for="taxDefaultType">新規行・未指定の初期税率</label>
+            <select id="taxDefaultType">
+              <option value="standard">標準税率</option>
+              <option value="reduced">軽減税率</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="taxRounding">端数処理</label>
+            <select id="taxRounding">
+              <option value="floor">税額切り捨て</option>
+              <option value="round">四捨五入</option>
+            </select>
+          </div>
+          <button id="saveTaxBtn" class="btn btn-secondary">消費税設定を保存</button>
         </div>
       </details>
 

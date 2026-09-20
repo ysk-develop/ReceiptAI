@@ -5,7 +5,8 @@ const STORAGE_KEYS = {
   API_KEY: 'receiptai_apiKey',
   MODEL: 'receiptai_model',
   MODELS: 'receiptai_models',
-  GAS_URL: 'receiptai_gasUrl'
+  GAS_URL: 'receiptai_gasUrl',
+  TAX: 'receiptai_tax'
 };
 
 export function getApiKey() {
@@ -50,4 +51,16 @@ export function setGasUrl(url) {
   } else {
     localStorage.removeItem(STORAGE_KEYS.GAS_URL);
   }
+}
+
+export function getTaxSettings() {
+  try {
+    return JSON.parse(localStorage.getItem(STORAGE_KEYS.TAX) || '{}');
+  } catch {
+    return {};
+  }
+}
+
+export function setTaxSettings(obj) {
+  localStorage.setItem(STORAGE_KEYS.TAX, JSON.stringify(obj));
 }

@@ -39,13 +39,29 @@ const LINE_SCHEMA = {
     date: { type: 'string', description: 'そのレシートの日付 YYYY-MM-DD' },
     total_amount: {
       type: 'number',
-      description: 'そのレシートの税込合計（同じreceipt_indexでは同値）'
+      description: 'そのレシート印字の税込合計（参考値）'
     },
     name: { type: 'string', description: '品目名（小計・税・合計行は出さない）' },
-    price: { type: 'number', description: '税込金額（円）' },
+    price: {
+      type: 'number',
+      description: 'レシート印字の個別金額（税抜が多い。換算せず印字どおり）'
+    },
+    tax_rate_type: {
+      type: 'string',
+      description: 'standard=標準10%対象, reduced=軽減8%対象（*や軽などの印があれば reduced）'
+    },
     category: { type: 'string' }
   },
-  required: ['receipt_index', 'shop_name', 'date', 'total_amount', 'name', 'price', 'category']
+  required: [
+    'receipt_index',
+    'shop_name',
+    'date',
+    'total_amount',
+    'name',
+    'price',
+    'tax_rate_type',
+    'category'
+  ]
 };
 
 const RECEIPT_SCHEMA = {
@@ -77,8 +93,9 @@ function buildPrompt(today, memo) {
 - 各行に shop_name / date / total_amount をそのレシートのもので繰り返してください。
 
 【金額】
-- price と total_amount は税込（円）。
-- 税抜単価のときは税込に換算。合計は「合計／お会計」の税込額。
+- price はレシートに印字されている個別金額をそのまま（多くの店では税抜）。アプリ側で税込換算するため、勝手に税込へ直さない。
+- total_amount だけはレシート下部の「合計／お会計」の税込額（参考）。
+- tax_rate_type は軽減対象（*・軽・8%など）なら "reduced"、それ以外は "standard"。
 - 小計・消費税・内税・外税・合計の行は lines に入れない。
 
 カテゴリは次から選択: [${categoryList}]
@@ -122,7 +139,8 @@ export function normalizeAnalysisResult(parsed, today = new Date().toISOString()
       if (/^(小計|合計|税|消費税|内税|外税|お預り|お釣り|お会計)/.test(name)) continue;
       g.items.push({
         name: name || '（未入力）',
-        price,
+        price, // 税抜（印字）
+        tax_rate_type: (line.tax_rate_type === 'reduced') ? 'reduced' : 'standard',
         category: String(line.category || 'その他')
       });
       if (Number(line.total_amount) > 0) g.total_amount = Number(line.total_amount);
@@ -157,6 +175,7 @@ export function normalizeAnalysisResult(parsed, today = new Date().toISOString()
     const items = (r.items || []).map((it) => ({
       name: String(it.name || '（未入力）'),
       price: Number(it.price) || 0,
+      tax_rate_type: it.tax_rate_type === 'reduced' ? 'reduced' : 'standard',
       category: String(it.category || 'その他')
     })).filter((it) => it.name || it.price);
 

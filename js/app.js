@@ -8,6 +8,9 @@ import {
   listReceipts, getReceipt
 } from './gemini-api.js';
 import { resizeImageFile } from './image-util.js';
+import {
+  getTaxSettings, saveTaxSettings, calcInclusive, normalizeRateType
+} from './tax.js';
 
 let imageData = null;
 let imageMime = 'image/jpeg';
@@ -105,6 +108,22 @@ function initSettings() {
   populateModelSelect();
   $('modelSelect').addEventListener('change', (e) => setModel(e.target.value));
   renderCategoryList();
+
+  const tax = getTaxSettings();
+  $('taxStandard').value = tax.standard_rate;
+  $('taxReduced').value = tax.reduced_rate;
+  $('taxDefaultType').value = tax.default_rate_type;
+  $('taxRounding').value = tax.rounding;
+  $('saveTaxBtn').onclick = () => {
+    saveTaxSettings({
+      standard_rate: Number($('taxStandard').value),
+      reduced_rate: Number($('taxReduced').value),
+      default_rate_type: $('taxDefaultType').value,
+      rounding: $('taxRounding').value
+    });
+    calcTotal();
+    showMessage('消費税設定を保存しました', 'success');
+  };
 }
 
 function initImageInput() {
@@ -137,25 +156,54 @@ function categoryOptionsHtml(selected) {
   ).join('');
 }
 
-function calcTotal() {
-  let total = 0;
-  document.querySelectorAll('#itemList .i-price').forEach((el) => {
-    total += Number(el.value) || 0;
-  });
-  $('totalPrice').textContent = `${total.toLocaleString()} 円`;
-  return total;
+function taxRateOptionsHtml(selected) {
+  const type = normalizeRateType(selected);
+  const tax = getTaxSettings();
+  return `
+    <option value="standard" ${type === 'standard' ? 'selected' : ''}>標準${tax.standard_rate}%</option>
+    <option value="reduced" ${type === 'reduced' ? 'selected' : ''}>軽減${tax.reduced_rate}%</option>
+  `;
 }
 
-function addItemRow(name = '', price = '', category = '食費') {
+function refreshRowIncl(row) {
+  const excl = Number(row.querySelector('.i-price')?.value) || 0;
+  const rateType = normalizeRateType(row.querySelector('.i-tax')?.value);
+  const { incl } = calcInclusive(excl, rateType);
+  const el = row.querySelector('.item-incl');
+  if (el) el.textContent = `${incl.toLocaleString()}`;
+}
+
+function calcTotal() {
+  const tax = getTaxSettings();
+  let exclSum = 0;
+  let inclSum = 0;
+  document.querySelectorAll('#itemList .item-row').forEach((row) => {
+    refreshRowIncl(row);
+    const excl = Number(row.querySelector('.i-price')?.value) || 0;
+    const rateType = normalizeRateType(row.querySelector('.i-tax')?.value);
+    exclSum += excl;
+    inclSum += calcInclusive(excl, rateType, tax).incl;
+  });
+  $('totalPrice').textContent = `${inclSum.toLocaleString()} 円`;
+  return { exclSum, inclSum };
+}
+
+function addItemRow(name = '', price = '', category = '食費', taxRateType = '') {
+  const tax = getTaxSettings();
+  const rateType = normalizeRateType(taxRateType || tax.default_rate_type, tax);
   const row = document.createElement('div');
   row.className = 'item-row';
+  const exclVal = price === '' || price == null ? '' : Number(price);
   row.innerHTML = `
     <input class="i-name" type="text" value="${escapeHtml(name)}" placeholder="品目名">
-    <input class="i-price" type="number" inputmode="numeric" value="${price === '' || price == null ? '' : Number(price)}" placeholder="円">
+    <input class="i-price" type="number" inputmode="numeric" value="${exclVal}" placeholder="税抜">
+    <select class="i-tax">${taxRateOptionsHtml(rateType)}</select>
+    <div class="item-incl">0</div>
     <select class="i-cat">${categoryOptionsHtml(category)}</select>
     <button type="button" class="btn-icon" aria-label="行を削除">✕</button>
   `;
   row.querySelector('.i-price').addEventListener('input', calcTotal);
+  row.querySelector('.i-tax').addEventListener('change', calcTotal);
   row.querySelector('.btn-icon').addEventListener('click', () => {
     row.remove();
     calcTotal();
@@ -168,20 +216,55 @@ function renderItems(items = []) {
   const container = $('itemList');
   container.innerHTML = '';
   if (!items.length) addItemRow();
-  else items.forEach((item) => addItemRow(item.name, item.price, item.category));
+  else {
+    items.forEach((item) => addItemRow(
+      item.name,
+      item.price,
+      item.category,
+      item.tax_rate_type
+    ));
+  }
 }
 
-function collectItems() {
+/** Collect for UI stash (税抜 + 税率). */
+function collectItemsRaw() {
   const items = [];
   document.querySelectorAll('#itemList .item-row').forEach((row) => {
     const name = row.querySelector('.i-name').value.trim();
-    const price = Number(row.querySelector('.i-price').value) || 0;
+    const price_excl = Number(row.querySelector('.i-price').value) || 0;
+    const tax_rate_type = normalizeRateType(row.querySelector('.i-tax').value);
     const category = row.querySelector('.i-cat').value;
-    if (name || price > 0) {
-      items.push({ name: name || '（未入力）', price, category });
+    if (name || price_excl > 0) {
+      items.push({
+        name: name || '（未入力）',
+        price: price_excl,
+        price_excl,
+        tax_rate_type,
+        category
+      });
     }
   });
   return items;
+}
+
+/** Collect for save: price = 税込（家計簿の正）, price_excl も付与 */
+function collectItemsForSave() {
+  const tax = getTaxSettings();
+  return collectItemsRaw().map((it) => {
+    const { incl, rate } = calcInclusive(it.price_excl, it.tax_rate_type, tax);
+    return {
+      name: it.name,
+      price: incl,
+      price_excl: it.price_excl,
+      tax_rate: rate,
+      tax_rate_type: it.tax_rate_type,
+      category: it.category
+    };
+  });
+}
+
+function collectItems() {
+  return collectItemsRaw();
 }
 
 function openEditor(parsed) {
@@ -215,17 +298,27 @@ function showReceiptAt(index) {
   $('receiptDate').value = dateVal;
   renderItems(items);
 
-  const itemsSum = items.reduce((s, it) => s + (Number(it.price) || 0), 0);
-  const total = Number(r.total_amount) > 0 ? Number(r.total_amount) : itemsSum;
-  const mismatch = Math.abs(total - itemsSum) > 1;
+  const { exclSum, inclSum } = calcTotal();
+  const printedTotal = Number(r.total_amount) || 0;
+  const diff = printedTotal > 0 ? printedTotal - inclSum : 0;
 
   $('detectedSummary').innerHTML =
     `<b>検出:</b> ${escapeHtml(shop || '不明')} / ${escapeHtml(dateVal)}（${items.length}件）<br>` +
-    `<b>税込合計:</b> ${total.toLocaleString()} 円` +
-    (mismatch
-      ? ` <span style="color:var(--error)">（明細合計 ${itemsSum.toLocaleString()} 円と差あり。必要なら明細を修正）</span>`
+    `<b>税抜合計:</b> ${exclSum.toLocaleString()} 円 → <b>税込換算:</b> ${inclSum.toLocaleString()} 円` +
+    (printedTotal > 0
+      ? `<br><b>レシート記載合計（参考）:</b> ${printedTotal.toLocaleString()} 円` +
+        (Math.abs(diff) > 0
+          ? `（換算との差 ${diff > 0 ? '+' : ''}${diff.toLocaleString()} 円 ※端数は手修正可）`
+          : '')
       : '') +
-    `<br><span class="hint">金額は税込で記録します。複数レシートは左右ボタンで切り替えられます。</span>`;
+    `<br><span class="hint">保存する金額は税込換算です。税率は設定または行の税率で変更できます。</span>`;
+
+  const hint = $('receiptTotalHint');
+  if (hint) {
+    hint.textContent = printedTotal > 0 && Math.abs(diff) > 0
+      ? `記載合計 ${printedTotal.toLocaleString()} 円 / 税込換算 ${inclSum.toLocaleString()} 円（差 ${diff.toLocaleString()} 円）`
+      : '';
+  }
 
   const multi = analyzedReceipts.length > 1;
   if (multi) {
@@ -247,13 +340,16 @@ function showReceiptAt(index) {
 /** Persist current form edits back into analyzedReceipts[current] */
 function stashCurrentReceiptEdits() {
   if (!analyzedReceipts.length) return;
-  const items = collectItems();
+  const items = collectItemsRaw();
+  const inclSum = collectItemsForSave().reduce((s, i) => s + i.price, 0);
   analyzedReceipts[currentReceiptIndex] = {
     ...analyzedReceipts[currentReceiptIndex],
     shop_name: $('shopName').value.trim() || '不明',
     date: $('receiptDate').value || todayStr(),
     items,
-    total_amount: items.reduce((s, i) => s + i.price, 0)
+    // keep printed total as reference; working total is converted
+    total_amount: analyzedReceipts[currentReceiptIndex].total_amount,
+    converted_total: inclSum
   };
 }
 
@@ -369,19 +465,19 @@ async function handleSend() {
   if (!gasUrl) return;
 
   stashCurrentReceiptEdits();
-  const items = collectItems();
-  if (items.length === 0) {
+  const itemsSave = collectItemsForSave();
+  if (itemsSave.length === 0) {
     showMessage('明細が1件以上必要です');
     return;
   }
 
-  const totalAmount = items.reduce((sum, i) => sum + i.price, 0);
+  const totalAmount = itemsSave.reduce((sum, i) => sum + i.price, 0);
   const payload = {
     timestamp: new Date().toISOString(),
     shop_name: $('shopName').value.trim() || '不明',
     date: $('receiptDate').value || todayStr(),
     total_amount: totalAmount,
-    items
+    items: itemsSave
   };
 
   $('sendBtn').disabled = true;
@@ -431,14 +527,28 @@ async function handleSendAll() {
   try {
     for (let i = 0; i < analyzedReceipts.length; i++) {
       const r = analyzedReceipts[i];
-      const items = r.items || [];
-      if (!items.length) continue;
+      const rawItems = r.items || [];
+      if (!rawItems.length) continue;
+      const tax = getTaxSettings();
+      const itemsSave = rawItems.map((it) => {
+        const excl = Number(it.price_excl ?? it.price) || 0;
+        const rateType = normalizeRateType(it.tax_rate_type, tax);
+        const { incl, rate } = calcInclusive(excl, rateType, tax);
+        return {
+          name: it.name,
+          price: incl,
+          price_excl: excl,
+          tax_rate: rate,
+          tax_rate_type: rateType,
+          category: it.category || 'その他'
+        };
+      });
       const payload = {
         timestamp: new Date().toISOString(),
         shop_name: r.shop_name || '不明',
         date: r.date || todayStr(),
-        total_amount: items.reduce((s, it) => s + (Number(it.price) || 0), 0),
-        items
+        total_amount: itemsSave.reduce((s, it) => s + it.price, 0),
+        items: itemsSave
       };
       try {
         await saveOnePayload(gasUrl, payload, i === 0 && Boolean(uploadImageBase64));

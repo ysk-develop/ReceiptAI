@@ -14,25 +14,37 @@ from .config import CATEGORIES
 
 API_BASE = "https://generativelanguage.googleapis.com/v1beta"
 
-RECEIPT_SCHEMA = {
+RECEIPT_ITEM_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string"},
+        "price": {"type": "number", "description": "税込金額"},
+        "category": {"type": "string"},
+    },
+    "required": ["name", "price", "category"],
+}
+
+SINGLE_RECEIPT_SCHEMA = {
     "type": "object",
     "properties": {
         "shop_name": {"type": "string"},
         "date": {"type": "string"},
-        "items": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string"},
-                    "price": {"type": "number"},
-                    "category": {"type": "string"},
-                },
-                "required": ["name", "price", "category"],
-            },
-        },
+        "total_amount": {"type": "number", "description": "税込合計"},
+        "items": {"type": "array", "items": RECEIPT_ITEM_SCHEMA},
     },
-    "required": ["shop_name", "date", "items"],
+    "required": ["shop_name", "date", "total_amount", "items"],
+}
+
+RECEIPT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "receipts": {
+            "type": "array",
+            "description": "画像内のレシートごと（店舗・日付が違うものは分ける）",
+            "items": SINGLE_RECEIPT_SCHEMA,
+        }
+    },
+    "required": ["receipts"],
 }
 
 
@@ -71,6 +83,46 @@ def fetch_models(api_key: str) -> list[dict[str, str]]:
     return models
 
 
+def normalize_analysis_result(parsed: dict[str, Any], today: str) -> list[dict[str, Any]]:
+    if isinstance(parsed.get("receipts"), list) and parsed["receipts"]:
+        raw_list = parsed["receipts"]
+    elif parsed.get("items") or parsed.get("shop_name"):
+        raw_list = [parsed]
+    else:
+        raw_list = []
+
+    out: list[dict[str, Any]] = []
+    for r in raw_list:
+        items = []
+        for it in r.get("items") or []:
+            items.append(
+                {
+                    "name": str(it.get("name") or "（未入力）"),
+                    "price": float(it.get("price") or 0),
+                    "category": str(it.get("category") or "その他"),
+                }
+            )
+        items = [i for i in items if i["name"] or i["price"]]
+        if not items:
+            continue
+        items_sum = sum(i["price"] for i in items)
+        total = float(r.get("total_amount") or 0)
+        if total <= 0:
+            total = items_sum
+        date_str = str(r.get("date") or "").strip()
+        if len(date_str) < 10:
+            date_str = today
+        out.append(
+            {
+                "shop_name": str(r.get("shop_name") or "不明").strip() or "不明",
+                "date": date_str[:10],
+                "total_amount": total,
+                "items": items,
+            }
+        )
+    return out
+
+
 def analyze_receipt(
     api_key: str,
     model: str,
@@ -84,12 +136,20 @@ def analyze_receipt(
     today = today or date_cls.today().isoformat()
     cats = ", ".join(CATEGORIES)
     prompt = f"""あなたは優秀な家計簿アシスタントです。
-提供されたレシート画像またはテキストメモから情報を抽出してください。
-- shop_name: 店舗名（不明なら「不明」）
-- date: 日付 YYYY-MM-DD（不明なら {today}）
-- items: 品目リスト（name, price, category）
-カテゴリは次から選択: [{cats}]
-JSONのみ出力してください。"""
+日本の家計簿では「実際に支払った税込金額」を記録します。
+
+【金額ルール・最重要】
+- 各品目の price は必ず税込（円）。
+- 税抜単価しか無い場合は税込に換算し、total_amount はレシートの税込合計行を使う。
+- 小計・消費税・合計の行は items に入れない。
+
+【複数レシート・最重要】
+- 1枚の写真に複数レシートがある場合、receipts を枚数分作る。
+- 店舗・日付が違うものを1つにまとめない。
+- 日付が読めないものだけ {today} を使う。
+
+カテゴリ: [{cats}]
+JSONのみ出力。"""
     if memo.strip():
         prompt += f"\n\n【入力メモ】\n{memo.strip()}"
 
@@ -125,4 +185,8 @@ JSONのみ出力してください。"""
         text += p.get("text") or ""
     if not text:
         raise RuntimeError("AIからの応答が空です")
-    return json.loads(text)
+    parsed = json.loads(text)
+    receipts = normalize_analysis_result(parsed, today)
+    if not receipts:
+        raise RuntimeError("レシートを検出できませんでした")
+    return {"receipts": receipts, "raw": parsed}

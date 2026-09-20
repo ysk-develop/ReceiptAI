@@ -79,6 +79,8 @@ class MainWindow(QMainWindow):
         self._selected_id: int | None = None
         self._workers: list[Worker] = []
         self._chart_widgets: list[QWidget] = []
+        self._analyzed_receipts: list[dict] = []
+        self._analysis_index: int = 0
 
         root = QWidget()
         self.setCentralWidget(root)
@@ -235,6 +237,13 @@ class MainWindow(QMainWindow):
         form = _card()
         fl = QHBoxLayout(form)
         fl.setContentsMargins(12, 12, 12, 12)
+
+        nav = QVBoxLayout()
+        nav.addWidget(QLabel("検出レシート"))
+        self.receipt_combo = QComboBox()
+        self.receipt_combo.currentIndexChanged.connect(self._on_receipt_combo_changed)
+        nav.addWidget(self.receipt_combo)
+        fl.addLayout(nav, 1)
 
         left = QVBoxLayout()
         left.addWidget(QLabel("店舗名"))
@@ -536,16 +545,68 @@ class MainWindow(QMainWindow):
 
     def _apply_analysis(self, result: object) -> None:
         data = result if isinstance(result, dict) else {}
+        receipts = data.get("receipts") if isinstance(data.get("receipts"), list) else []
+        if not receipts and (data.get("items") or data.get("shop_name")):
+            receipts = [data]
+        if not receipts:
+            self._analyze_failed("レシートを検出できませんでした")
+            return
+
+        self._analyzed_receipts = receipts
+        self._analysis_index = 0
         self._selected_id = None
-        self.shop_edit.setText(str(data.get("shop_name") or ""))
-        self.date_edit.setText(str(data.get("date") or date.today().isoformat()))
+        self.receipt_combo.blockSignals(True)
+        self.receipt_combo.clear()
+        for i, r in enumerate(receipts):
+            label = f"{i + 1}. {r.get('shop_name') or '不明'} / {r.get('date') or ''} ({len(r.get('items') or [])}件)"
+            self.receipt_combo.addItem(label)
+        self.receipt_combo.blockSignals(False)
+        self._load_analyzed_receipt(0)
+        n = len(receipts)
+        self.analyze_status.setText(
+            f"解析完了。{n} 枚検出（税込）。編集タブで切り替えて確認してください。"
+            if n > 1
+            else "解析完了。税込金額を確認して保存してください。"
+        )
+        self.tabs.setCurrentIndex(1)
+
+    def _on_receipt_combo_changed(self, index: int) -> None:
+        if index < 0 or not self._analyzed_receipts:
+            return
+        self._stash_editor_to_analysis()
+        self._load_analyzed_receipt(index)
+
+    def _stash_editor_to_analysis(self) -> None:
+        if not self._analyzed_receipts:
+            return
+        i = self._analysis_index
+        if i < 0 or i >= len(self._analyzed_receipts):
+            return
+        items = self._collect_items()
+        self._analyzed_receipts[i] = {
+            **self._analyzed_receipts[i],
+            "shop_name": self.shop_edit.text().strip() or "不明",
+            "date": self.date_edit.text().strip() or date.today().isoformat(),
+            "items": items,
+            "total_amount": sum(x["price"] for x in items),
+        }
+
+    def _load_analyzed_receipt(self, index: int) -> None:
+        if index < 0 or index >= len(self._analyzed_receipts):
+            return
+        self._analysis_index = index
+        r = self._analyzed_receipts[index]
+        self.shop_edit.setText(str(r.get("shop_name") or ""))
+        self.date_edit.setText(str(r.get("date") or date.today().isoformat()))
         self._clear_items()
-        for it in data.get("items") or []:
+        for it in r.get("items") or []:
             self._add_item_row(it.get("name", ""), it.get("price", 0), it.get("category", "その他"))
         if self.items_table.rowCount() == 0:
             self._add_item_row()
-        self.analyze_status.setText("解析完了。内容を確認して保存してください。")
-        self.tabs.setCurrentIndex(1)
+        if self.receipt_combo.currentIndex() != index:
+            self.receipt_combo.blockSignals(True)
+            self.receipt_combo.setCurrentIndex(index)
+            self.receipt_combo.blockSignals(False)
 
     def _analyze_failed(self, msg: str) -> None:
         self.analyze_status.setText("解析失敗")

@@ -57,6 +57,11 @@
         <div class="card">
           <h2>検出サマリー</h2>
           <div id="detectedSummary" class="notice"></div>
+          <div id="receiptNav" class="btn-row hidden" style="margin-top:0.75rem">
+            <button type="button" id="prevReceiptBtn" class="btn btn-secondary">← 前のレシート</button>
+            <button type="button" id="nextReceiptBtn" class="btn btn-secondary">次のレシート →</button>
+          </div>
+          <p id="receiptNavLabel" class="hint hidden" style="margin-top:0.5rem"></p>
         </div>
 
         <div class="card">
@@ -87,7 +92,8 @@
             <span id="totalPrice" class="total-price">0 円</span>
           </div>
 
-          <button id="sendBtn" class="btn btn-success">☁ スプレッドシートへ保存</button>
+          <button id="sendBtn" class="btn btn-success">☁ このレシートをシートへ保存</button>
+          <button id="sendAllBtn" class="btn btn-secondary hidden">☁ 検出した全レシートを保存</button>
         </div>
       </div>
     </section>

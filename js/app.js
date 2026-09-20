@@ -13,6 +13,9 @@ let imageData = null;
 let imageMime = 'image/jpeg';
 /** Resized JPEG for Drive upload (may equal imageData) */
 let uploadImageBase64 = null;
+/** @type {Array<{shop_name:string,date:string,total_amount:number,items:Array}>} */
+let analyzedReceipts = [];
+let currentReceiptIndex = 0;
 
 function $(id) {
   return document.getElementById(id);
@@ -182,29 +185,102 @@ function collectItems() {
 }
 
 function openEditor(parsed) {
-  const shop = parsed?.shop_name || '';
-  const date = parsed?.date && /^\d{4}-\d{2}-\d{2}$/.test(parsed.date)
-    ? parsed.date
-    : todayStr();
-  const items = parsed?.items || [];
-  $('shopName').value = shop;
-  $('receiptDate').value = date;
-  renderItems(items);
-  $('detectedSummary').innerHTML = parsed
-    ? `<b>検出結果:</b> ${escapeHtml(shop || '不明')} / ${escapeHtml(date)}（${items.length}件）`
-    : '手入力モードです。明細を追加して保存できます。';
+  // Accept either a single receipt object or { receipts }
+  if (parsed && Array.isArray(parsed.receipts)) {
+    analyzedReceipts = parsed.receipts;
+  } else if (parsed) {
+    analyzedReceipts = [parsed];
+  } else {
+    analyzedReceipts = [{
+      shop_name: '',
+      date: todayStr(),
+      total_amount: 0,
+      items: []
+    }];
+  }
+  currentReceiptIndex = 0;
+  showReceiptAt(0);
   show($('resultArea'));
+}
+
+function showReceiptAt(index) {
+  if (!analyzedReceipts.length) return;
+  currentReceiptIndex = Math.max(0, Math.min(index, analyzedReceipts.length - 1));
+  const r = analyzedReceipts[currentReceiptIndex];
+  const shop = r.shop_name || '';
+  const dateVal = r.date && /^\d{4}-\d{2}-\d{2}$/.test(r.date) ? r.date : todayStr();
+  const items = r.items || [];
+
+  $('shopName').value = shop;
+  $('receiptDate').value = dateVal;
+  renderItems(items);
+
+  const itemsSum = items.reduce((s, it) => s + (Number(it.price) || 0), 0);
+  const total = Number(r.total_amount) > 0 ? Number(r.total_amount) : itemsSum;
+  const mismatch = Math.abs(total - itemsSum) > 1;
+
+  $('detectedSummary').innerHTML =
+    `<b>検出:</b> ${escapeHtml(shop || '不明')} / ${escapeHtml(dateVal)}（${items.length}件）<br>` +
+    `<b>税込合計:</b> ${total.toLocaleString()} 円` +
+    (mismatch
+      ? ` <span style="color:var(--error)">（明細合計 ${itemsSum.toLocaleString()} 円と差あり。必要なら明細を修正）</span>`
+      : '') +
+    `<br><span class="hint">金額は税込で記録します。複数レシートは左右ボタンで切り替えられます。</span>`;
+
+  const multi = analyzedReceipts.length > 1;
+  if (multi) {
+    show($('receiptNav'));
+    show($('receiptNavLabel'));
+    show($('sendAllBtn'));
+    $('receiptNavLabel').textContent =
+      `レシート ${currentReceiptIndex + 1} / ${analyzedReceipts.length}`;
+    $('prevReceiptBtn').disabled = currentReceiptIndex <= 0;
+    $('nextReceiptBtn').disabled = currentReceiptIndex >= analyzedReceipts.length - 1;
+  } else {
+    hide($('receiptNav'));
+    hide($('receiptNavLabel'));
+    hide($('sendAllBtn'));
+  }
+  calcTotal();
+}
+
+/** Persist current form edits back into analyzedReceipts[current] */
+function stashCurrentReceiptEdits() {
+  if (!analyzedReceipts.length) return;
+  const items = collectItems();
+  analyzedReceipts[currentReceiptIndex] = {
+    ...analyzedReceipts[currentReceiptIndex],
+    shop_name: $('shopName').value.trim() || '不明',
+    date: $('receiptDate').value || todayStr(),
+    items,
+    total_amount: items.reduce((s, i) => s + i.price, 0)
+  };
+}
+
+function goPrevReceipt() {
+  stashCurrentReceiptEdits();
+  showReceiptAt(currentReceiptIndex - 1);
+}
+
+function goNextReceipt() {
+  stashCurrentReceiptEdits();
+  showReceiptAt(currentReceiptIndex + 1);
 }
 
 function handleClear() {
   imageData = null;
   uploadImageBase64 = null;
   imageMime = 'image/jpeg';
+  analyzedReceipts = [];
+  currentReceiptIndex = 0;
   $('imageInput').value = '';
   $('textMemo').value = '';
   hide($('imagePreview'));
   $('previewImg').src = '';
   hide($('resultArea'));
+  hide($('receiptNav'));
+  hide($('receiptNavLabel'));
+  hide($('sendAllBtn'));
   clearMessage();
   $('imageStatus').textContent = '写真を選ぶか、メモを入力してください';
   $('itemList').innerHTML = '';
@@ -251,13 +327,19 @@ async function handleAnalyze() {
   show($('loadingArea'));
   $('analyzeBtn').disabled = true;
   try {
-    const parsed = await analyzeReceipt(apiKey, model, {
+    const result = await analyzeReceipt(apiKey, model, {
       base64Data: imageData,
       mimeType: imageMime,
       memo
     });
-    openEditor(parsed);
-    showMessage('解析完了。内容を確認・修正してください。', 'success');
+    openEditor(result);
+    const n = result.receipts?.length || 0;
+    showMessage(
+      n > 1
+        ? `解析完了。${n} 枚のレシートを検出しました。切り替えながら確認してください。`
+        : '解析完了。税込金額を確認・修正してください。',
+      'success'
+    );
   } catch (err) {
     showMessage(err.message);
   } finally {
@@ -272,11 +354,21 @@ function handleManualEdit() {
   showMessage('手入力モードを開きました', 'success');
 }
 
+async function saveOnePayload(gasUrl, payload, attachImage) {
+  const body = { ...payload };
+  if (attachImage && uploadImageBase64) {
+    body.image_base64 = uploadImageBase64;
+    body.image_mime = 'image/jpeg';
+  }
+  return sendToGas(gasUrl, body);
+}
+
 async function handleSend() {
   clearMessage();
   const gasUrl = requireGasUrl();
   if (!gasUrl) return;
 
+  stashCurrentReceiptEdits();
   const items = collectItems();
   if (items.length === 0) {
     showMessage('明細が1件以上必要です');
@@ -291,20 +383,23 @@ async function handleSend() {
     total_amount: totalAmount,
     items
   };
-  if (uploadImageBase64) {
-    payload.image_base64 = uploadImageBase64;
-    payload.image_mime = 'image/jpeg';
-  }
 
   $('sendBtn').disabled = true;
   $('sendBtn').textContent = '送信中...';
   try {
-    const result = await sendToGas(gasUrl, payload);
+    // Attach image only to the first receipt save in a multi set, once
+    const attachImage = Boolean(uploadImageBase64) && currentReceiptIndex === 0;
+    const result = await saveOnePayload(gasUrl, payload, attachImage || analyzedReceipts.length <= 1);
     setGasUrl(gasUrl);
     if (result.verified) {
-      const img = result.result?.image_file_id ? ' / 画像あり' : '';
-      showMessage(`保存成功（スプレッドシート）${img}`, 'success');
-      handleClear();
+      showMessage('このレシートを保存しました', 'success');
+      if (analyzedReceipts.length > 1) {
+        analyzedReceipts.splice(currentReceiptIndex, 1);
+        if (!analyzedReceipts.length) handleClear();
+        else showReceiptAt(Math.min(currentReceiptIndex, analyzedReceipts.length - 1));
+      } else {
+        handleClear();
+      }
     } else {
       showMessage(
         `送信しました（結果未確認）。履歴タブやスプレッドシートを確認してください。\n${result.hint || ''}`,
@@ -315,7 +410,49 @@ async function handleSend() {
     showMessage(`送信エラー: ${err.message}`);
   } finally {
     $('sendBtn').disabled = false;
-    $('sendBtn').textContent = '☁ スプレッドシートへ保存';
+    $('sendBtn').textContent = '☁ このレシートをシートへ保存';
+  }
+}
+
+async function handleSendAll() {
+  clearMessage();
+  const gasUrl = requireGasUrl();
+  if (!gasUrl) return;
+  stashCurrentReceiptEdits();
+  if (!analyzedReceipts.length) {
+    showMessage('保存するレシートがありません');
+    return;
+  }
+
+  $('sendAllBtn').disabled = true;
+  $('sendAllBtn').textContent = '一括送信中...';
+  let ok = 0;
+  let fail = 0;
+  try {
+    for (let i = 0; i < analyzedReceipts.length; i++) {
+      const r = analyzedReceipts[i];
+      const items = r.items || [];
+      if (!items.length) continue;
+      const payload = {
+        timestamp: new Date().toISOString(),
+        shop_name: r.shop_name || '不明',
+        date: r.date || todayStr(),
+        total_amount: items.reduce((s, it) => s + (Number(it.price) || 0), 0),
+        items
+      };
+      try {
+        await saveOnePayload(gasUrl, payload, i === 0 && Boolean(uploadImageBase64));
+        ok += 1;
+      } catch {
+        fail += 1;
+      }
+    }
+    setGasUrl(gasUrl);
+    showMessage(`一括保存: 成功 ${ok} / 失敗 ${fail}`, fail ? 'error' : 'success');
+    if (fail === 0) handleClear();
+  } finally {
+    $('sendAllBtn').disabled = false;
+    $('sendAllBtn').textContent = '☁ 検出した全レシートを保存';
   }
 }
 
@@ -483,6 +620,9 @@ function init() {
   $('clearBtn').addEventListener('click', handleClear);
   $('addItemBtn').addEventListener('click', () => addItemRow());
   $('sendBtn').addEventListener('click', handleSend);
+  $('sendAllBtn').addEventListener('click', handleSendAll);
+  $('prevReceiptBtn').addEventListener('click', goPrevReceipt);
+  $('nextReceiptBtn').addEventListener('click', goNextReceipt);
   $('manualSaveBtn').addEventListener('click', handleManualEdit);
   $('fetchModelsBtn').addEventListener('click', handleFetchModels);
   $('refreshHistoryBtn').addEventListener('click', handleRefreshHistory);

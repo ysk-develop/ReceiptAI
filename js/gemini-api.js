@@ -24,38 +24,101 @@ export async function fetchModels(apiKey) {
     .filter((m) => /gemini/i.test(m.id));
 }
 
+const RECEIPT_ITEM_SCHEMA = {
+  type: 'object',
+  properties: {
+    name: { type: 'string', description: '品目名（小計・税・合計行は含めない）' },
+    price: { type: 'number', description: '税込金額（円）' },
+    category: { type: 'string' }
+  },
+  required: ['name', 'price', 'category']
+};
+
+const SINGLE_RECEIPT_SCHEMA = {
+  type: 'object',
+  properties: {
+    shop_name: { type: 'string', description: 'そのレシートの店舗名' },
+    date: { type: 'string', description: 'そのレシートの日付 YYYY-MM-DD' },
+    total_amount: { type: 'number', description: 'レシート記載の税込合計金額' },
+    items: {
+      type: 'array',
+      items: RECEIPT_ITEM_SCHEMA
+    }
+  },
+  required: ['shop_name', 'date', 'total_amount', 'items']
+};
+
+/** Multi-receipt friendly schema (1 image may contain several receipts). */
 const RECEIPT_SCHEMA = {
   type: 'object',
   properties: {
-    shop_name: { type: 'string' },
-    date: { type: 'string' },
-    items: {
+    receipts: {
       type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          name: { type: 'string' },
-          price: { type: 'number' },
-          category: { type: 'string' }
-        },
-        required: ['name', 'price', 'category']
-      }
+      description: '画像内のレシートごと（店舗・日付が違うものは必ず分ける）',
+      items: SINGLE_RECEIPT_SCHEMA
     }
   },
-  required: ['shop_name', 'date', 'items']
+  required: ['receipts']
 };
 
 function buildPrompt(today, memo) {
   const categoryList = CATEGORIES.join(', ');
   let text = `あなたは優秀な家計簿アシスタントです。
-提供されたレシート画像またはテキストメモから情報を抽出してください。
-- shop_name: 店舗名（不明なら「不明」）
-- date: 日付 YYYY-MM-DD（不明なら ${today}）
-- items: 品目リスト（name, price, category）
+日本の家計簿では「実際に支払った税込金額」を記録します。
+
+【金額ルール・最重要】
+- 各品目の price は必ず税込（円）にしてください。
+- レシートに税抜単価と税込合計がある場合、品目は税込に換算し、合計はレシートの「合計／税込合計／お会計」行の金額を total_amount に入れてください。
+- 税抜のまま合計しないでください。小計・消費税・内税・外税・合計の行自体は items に入れないでください。
+- 値引き行がある場合は負の金額、または対象品目から差し引いた税込額にしてください。
+
+【複数レシート・最重要】
+- 1枚の写真に複数のレシートがある場合、receipts 配列の要素をレシート枚数分作ってください。
+- 店舗名・日付が異なるレシートを1つにまとめないでください。
+- 各レシートごとに shop_name / date / total_amount / items を独立して設定してください。
+- 日付が読めないレシートだけ ${today} を使い、読める日付は必ずその日付にしてください。
+- 店舗名が読めない場合のみ「不明」。
+
 カテゴリは次から選択: [${categoryList}]
 JSONのみ出力してください。`;
   if (memo) text += `\n\n【入力メモ】\n${memo}`;
   return text;
+}
+
+/**
+ * Normalize model output to { receipts: [...] }.
+ * Also accepts legacy single-receipt shape.
+ */
+export function normalizeAnalysisResult(parsed, today = new Date().toISOString().slice(0, 10)) {
+  let list = [];
+  if (parsed && Array.isArray(parsed.receipts) && parsed.receipts.length) {
+    list = parsed.receipts;
+  } else if (parsed && (parsed.items || parsed.shop_name)) {
+    list = [parsed];
+  }
+
+  return list.map((r, idx) => {
+    const items = (r.items || []).map((it) => ({
+      name: String(it.name || '（未入力）'),
+      price: Number(it.price) || 0,
+      category: String(it.category || 'その他')
+    })).filter((it) => it.name || it.price);
+
+    const itemsSum = items.reduce((s, it) => s + it.price, 0);
+    let total = Number(r.total_amount);
+    if (!Number.isFinite(total) || total <= 0) total = itemsSum;
+
+    let dateStr = String(r.date || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) dateStr = today;
+
+    return {
+      shop_name: String(r.shop_name || '不明').trim() || '不明',
+      date: dateStr,
+      total_amount: total,
+      items,
+      _index: idx
+    };
+  }).filter((r) => r.items.length > 0);
 }
 
 export async function analyzeReceipt(apiKey, model, { base64Data, mimeType, memo }) {
@@ -88,7 +151,10 @@ export async function analyzeReceipt(apiKey, model, { base64Data, mimeType, memo
   const data = await res.json();
   const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!text) throw new Error('AIからの応答が空です');
-  return JSON.parse(text);
+  const parsed = JSON.parse(text);
+  const receipts = normalizeAnalysisResult(parsed, today);
+  if (!receipts.length) throw new Error('レシートを検出できませんでした');
+  return { receipts, raw: parsed };
 }
 
 export function normalizeGasUrl(url) {

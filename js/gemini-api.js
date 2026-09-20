@@ -342,6 +342,18 @@ export async function getReceipt(gasUrl, receiptId) {
   return data;
 }
 
+/** Physically delete receipt rows (and unused Drive image) via GAS. */
+export async function deleteReceipt(gasUrl, receiptId, { deleteImage = true } = {}) {
+  if (!receiptId) throw new Error('削除対象のIDがありません');
+  const data = await gasJsonp(gasUrl, {
+    action: 'delete',
+    id: receiptId,
+    delete_image: deleteImage ? '1' : '0'
+  }, 90000);
+  if (data.status !== 'ok') throw new Error(data.message || '削除失敗');
+  return data;
+}
+
 /** Fetch receipt image bytes via GAS (avoids broken Drive hotlink in <img>). */
 export async function fetchReceiptImage(gasUrl, fileId) {
   if (!fileId) throw new Error('画像IDがありません');

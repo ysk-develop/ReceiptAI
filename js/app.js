@@ -5,7 +5,7 @@ import {
 import { CATEGORIES, normalizeCategory } from './categories.js';
 import {
   fetchModels, analyzeReceipt, sendToGas, pingGas,
-  listReceipts, getReceipt, fetchReceiptImage
+  listReceipts, getReceipt, fetchReceiptImage, deleteReceipt
 } from './gemini-api.js';
 import { resizeImageFile } from './image-util.js';
 import {
@@ -843,6 +843,7 @@ async function handleRefreshHistory() {
         <div class="btn-row">
           <button type="button" class="btn btn-secondary btn-detail">明細</button>
           <button type="button" class="btn btn-primary btn-image" ${r.image_file_id ? '' : 'disabled'}>画像を表示</button>
+          <button type="button" class="btn btn-danger-outline btn-delete">削除</button>
         </div>
         <div class="history-detail hidden"></div>
       `;
@@ -865,6 +866,31 @@ async function handleRefreshHistory() {
       });
       card.querySelector('.btn-image').addEventListener('click', () => {
         openImageModal(r.image_view_url, r.image_file_id);
+      });
+      card.querySelector('.btn-delete').addEventListener('click', async () => {
+        const label = `${r.shop_name || '不明'} / ${r.date || ''} / ${Number(r.total_amount || 0).toLocaleString()} 円`;
+        if (!confirm(`このレシートを完全に削除しますか？\n（スプレッドシートから物理削除。他レシートが使っていなければ画像も削除）\n\n${label}`)) {
+          return;
+        }
+        const btn = card.querySelector('.btn-delete');
+        btn.disabled = true;
+        btn.textContent = '削除中…';
+        try {
+          const result = await deleteReceipt(gasUrl, r.receipt_id, { deleteImage: true });
+          card.remove();
+          const left = $('historyList').querySelectorAll('.history-card').length;
+          $('historyStatus').textContent = left ? `${left} 件` : 'データがありません';
+          showMessage(
+            `削除しました（行 ${result.deleted_rows || 0}` +
+            (result.deleted_images?.length ? ` / 画像 ${result.deleted_images.length}` : '') +
+            '）',
+            'success'
+          );
+        } catch (err) {
+          btn.disabled = false;
+          btn.textContent = '削除';
+          showMessage(`削除エラー: ${err.message}`);
+        }
       });
       frag.appendChild(card);
     }

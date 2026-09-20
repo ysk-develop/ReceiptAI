@@ -78,6 +78,26 @@ def get_image(gas_url: str, file_id: str) -> dict[str, Any]:
     return data
 
 
+def delete_receipt(
+    gas_url: str,
+    receipt_id: str,
+    *,
+    delete_image: bool = True,
+) -> dict[str, Any]:
+    data = _get(
+        gas_url,
+        {
+            "action": "delete",
+            "id": receipt_id,
+            "delete_image": "1" if delete_image else "0",
+        },
+        timeout=120,
+    )
+    if data.get("status") != "ok":
+        raise RuntimeError(data.get("message") or "delete failed")
+    return data
+
+
 def save_receipt(gas_url: str, payload: dict[str, Any]) -> dict[str, Any]:
     body = {"action": "save", **payload}
     data = _post(gas_url, body)

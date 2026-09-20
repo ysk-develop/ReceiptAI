@@ -258,6 +258,18 @@ def delete_receipt(receipt_id: int, db_path: Path | None = None) -> None:
         conn.execute("DELETE FROM receipts WHERE id = ?", (receipt_id,))
 
 
+def delete_by_cloud_id(cloud_receipt_id: str, db_path: Path | None = None) -> int:
+    """Delete local row matching cloud_receipt_id. Returns deleted count."""
+    if not cloud_receipt_id:
+        return 0
+    with get_conn(db_path) as conn:
+        cur = conn.execute(
+            "DELETE FROM receipts WHERE cloud_receipt_id = ?",
+            (cloud_receipt_id,),
+        )
+        return int(cur.rowcount or 0)
+
+
 def list_receipts(
     *,
     year_month: str | None = None,

@@ -234,6 +234,10 @@ main {
   border: 1px solid var(--error);
 }
 
+.btn-danger-outline:hover:not(:disabled) {
+  background: #fef2f2;
+}
+
 .btn-row {
   display: flex;
   gap: 0.5rem;

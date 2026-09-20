@@ -35,6 +35,9 @@ function doPost(e) {
     if (action === 'save') {
       return respond_(e, saveReceipt_(data));
     }
+    if (action === 'delete') {
+      return respond_(e, deleteReceipt_(data.id || data.receipt_id, data.delete_image !== false));
+    }
     return respond_(e, { status: 'error', message: 'unknown action: ' + action });
   } catch (err) {
     try {
@@ -61,6 +64,8 @@ function doGet(e) {
       result = getReceipt_(p.id || '');
     } else if (action === 'image') {
       result = getImageMeta_(p.id || '', p.data === '1' || p.data === 'true');
+    } else if (action === 'delete') {
+      result = deleteReceipt_(p.id || '', p.delete_image !== '0');
     } else {
       result = { status: 'error', message: 'unknown action' };
     }
@@ -195,6 +200,63 @@ function listReceipts_(month, limit) {
     return a.date < b.date ? 1 : -1;
   });
   return { status: 'ok', receipts: list.slice(0, limit) };
+}
+
+/**
+ * 物理削除: シート上の該当 receipt_id 行をすべて削除。
+ * 画像は他レシートが参照していなければ Drive のゴミ箱へ。
+ */
+function deleteReceipt_(receiptId, deleteImage) {
+  receiptId = String(receiptId || '').trim();
+  if (!receiptId) throw new Error('id が空です');
+
+  var sheet = getSheet_();
+  var last = sheet.getLastRow();
+  if (last < 2) return { status: 'error', message: 'not found' };
+
+  var values = sheet.getRange(2, 1, last - 1, HEADERS.length).getValues();
+  var rowNums = [];
+  var imageIds = {};
+  for (var i = 0; i < values.length; i++) {
+    if (String(values[i][1]) !== receiptId) continue;
+    rowNums.push(i + 2);
+    var imgId = String(values[i][8] || '').trim();
+    if (imgId) imageIds[imgId] = true;
+  }
+  if (!rowNums.length) return { status: 'error', message: 'not found' };
+
+  rowNums.sort(function (a, b) { return b - a; });
+  for (var j = 0; j < rowNums.length; j++) {
+    sheet.deleteRow(rowNums[j]);
+  }
+
+  var deletedImages = [];
+  if (deleteImage !== false) {
+    last = sheet.getLastRow();
+    var stillUsed = {};
+    if (last >= 2) {
+      values = sheet.getRange(2, 1, last - 1, HEADERS.length).getValues();
+      for (var k = 0; k < values.length; k++) {
+        var fid = String(values[k][8] || '').trim();
+        if (fid) stillUsed[fid] = true;
+      }
+    }
+    for (var key in imageIds) {
+      if (!imageIds.hasOwnProperty(key)) continue;
+      if (stillUsed[key]) continue;
+      try {
+        DriveApp.getFileById(key).setTrashed(true);
+        deletedImages.push(key);
+      } catch (_) {}
+    }
+  }
+
+  return {
+    status: 'ok',
+    receipt_id: receiptId,
+    deleted_rows: rowNums.length,
+    deleted_images: deletedImages
+  };
 }
 
 function getReceipt_(receiptId) {

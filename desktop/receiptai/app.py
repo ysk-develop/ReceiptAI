@@ -166,8 +166,8 @@ class MainWindow(QMainWindow):
         table_card = _card()
         tv = QVBoxLayout(table_card)
         tv.setContentsMargins(8, 8, 8, 8)
-        self.list_table = QTableWidget(0, 5)
-        self.list_table.setHorizontalHeaderLabels(["日付", "店舗", "合計", "編集", "画像"])
+        self.list_table = QTableWidget(0, 6)
+        self.list_table.setHorizontalHeaderLabels(["日付", "店舗", "合計", "編集", "画像", "削除"])
         self.list_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.list_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.list_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -231,6 +231,15 @@ class MainWindow(QMainWindow):
                 lambda _=False, u=view_url, f=file_id: self.show_receipt_image(u, f)
             )
             self.list_table.setCellWidget(row, 4, img_btn)
+
+            del_btn = _btn("削除", "DangerButton")
+            del_btn.setFixedWidth(72)
+            cloud_id = str(r.get("cloud_receipt_id") or "")
+            del_btn.clicked.connect(
+                lambda _=False, i=rid, c=cloud_id, shop=str(r["shop_name"]), d=str(r["date"]):
+                self.delete_receipt_row(i, c, shop, d)
+            )
+            self.list_table.setCellWidget(row, 5, del_btn)
 
     # ── edit ───────────────────────────────────────────────
     def _build_edit_tab(self) -> None:
@@ -824,6 +833,62 @@ class MainWindow(QMainWindow):
             )
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, "接続失敗", str(exc))
+
+    def delete_receipt_row(
+        self,
+        receipt_id: int,
+        cloud_id: str,
+        shop: str,
+        date_str: str,
+    ) -> None:
+        label = f"{shop} / {date_str}"
+        reply = QMessageBox.question(
+            self,
+            "削除の確認",
+            f"このレシートを完全に削除しますか？\n（復元できません）\n\n{label}",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        gas_url = self.cfg.get("gas_url") or self.gas_edit.text().strip()
+        sheet_msg = ""
+        if cloud_id and gas_url:
+            try:
+                result = gas_client.delete_receipt(gas_url, cloud_id, delete_image=True)
+                sheet_msg = (
+                    f"シート: {result.get('deleted_rows', 0)} 行削除"
+                    + (
+                        f" / 画像 {len(result.get('deleted_images') or [])}"
+                        if result.get("deleted_images")
+                        else ""
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001
+                QMessageBox.critical(
+                    self,
+                    "削除エラー",
+                    f"スプレッドシート側の削除に失敗しました。\n"
+                    f"ローカルDBはまだ残しています。\n\n{exc}",
+                )
+                return
+        elif cloud_id and not gas_url:
+            QMessageBox.warning(
+                self,
+                "削除",
+                "クラウドIDがありますが GAS URL 未設定です。\n"
+                "設定でURLを保存するか、シート側は手動で削除してください。\n"
+                "このままローカルのみ削除します。",
+            )
+
+        db.delete_receipt(receipt_id)
+        self.refresh_all()
+        QMessageBox.information(
+            self,
+            "削除完了",
+            "ローカルDBから削除しました。" + (f"\n{sheet_msg}" if sheet_msg else ""),
+        )
 
     def show_receipt_image(self, view_url: str, file_id: str) -> None:
         gas_url = self.cfg.get("gas_url") or self.gas_edit.text().strip()

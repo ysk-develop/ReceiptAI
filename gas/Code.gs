@@ -3,11 +3,12 @@
  * 正本: スプレッドシート / 画像: Drive(images) / API: doPost + doGet(JSONP可)
  *
  * 【セットアップ】
- * 1. このコードを貼付け
- * 2. 初回はエディタで setupReceiptAI() を実行（シート・フォルダ作成）
+ * 1. このコードを貼付け（同じフォルダに appsscript.json も配置）
+ * 2. 初回はエディタで setupReceiptAI() を実行（シート・フォルダ作成＋権限許可）
  * 3. デプロイ → ウェブアプリ（実行:自分 / アクセス:全員）
  * 4. /exec URL をスマホ・PCアプリに設定
  * 5. コード変更後は必ず「新バージョン」で再デプロイ
+ * 6. 「openById の権限がありません」が出たら setupReceiptAI を再実行して権限を再許可し、新バージョン再デプロイ
  *
  * 任意: SPREADSHEET_ID / FOLDER_ID を固定したい場合のみ下に記入
  */
@@ -285,22 +286,61 @@ function getImagesFolder_() {
 }
 
 function getSpreadsheet_() {
-  if (SPREADSHEET_ID) return SpreadsheetApp.openById(SPREADSHEET_ID);
+  var props = PropertiesService.getScriptProperties();
+  var fixedId = String(SPREADSHEET_ID || '').trim();
+  var cachedId = fixedId || props.getProperty('SPREADSHEET_ID') || '';
+
+  if (cachedId) {
+    try {
+      return SpreadsheetApp.openById(cachedId);
+    } catch (err) {
+      if (!fixedId) props.deleteProperty('SPREADSHEET_ID');
+      throw authFriendlyError_(err);
+    }
+  }
+
   var root = getRootFolder_();
   var files = root.getFilesByName('ReceiptAI');
   while (files.hasNext()) {
     var f = files.next();
     if (f.getMimeType() === MimeType.GOOGLE_SHEETS) {
-      return SpreadsheetApp.open(f);
+      try {
+        var existing = SpreadsheetApp.openById(f.getId());
+        props.setProperty('SPREADSHEET_ID', f.getId());
+        return existing;
+      } catch (err) {
+        throw authFriendlyError_(err);
+      }
     }
   }
+
   var ss = SpreadsheetApp.create('ReceiptAI');
   var file = DriveApp.getFileById(ss.getId());
   root.addFile(file);
   try {
     DriveApp.getRootFolder().removeFile(file);
   } catch (_) {}
+  props.setProperty('SPREADSHEET_ID', ss.getId());
   return ss;
+}
+
+/** openById 権限不足時の案内（再承認・再デプロイが必要） */
+function authFriendlyError_(err) {
+  var msg = String(err && err.message ? err.message : err);
+  if (
+    msg.indexOf('権限') >= 0 ||
+    msg.indexOf('permission') >= 0 ||
+    msg.indexOf('Authorization') >= 0 ||
+    msg.indexOf('openById') >= 0
+  ) {
+    return new Error(
+      'スプレッドシートを開く権限がありません。' +
+      'GASエディタで setupReceiptAI を実行し、表示された権限をすべて許可したうえで、' +
+      'デプロイ→ウェブアプリ→「新バージョン」で再デプロイしてください。' +
+      '（必要な権限: spreadsheets / drive）詳細: ' + msg
+    );
+  }
+  return err instanceof Error ? err : new Error(msg);
 }
 
 function getSheet_() {

@@ -19,11 +19,17 @@ https://ysk-develop.github.io/ReceiptAI/
 ### GAS 初回セットアップ
 
 1. [Apps Script](https://script.google.com/) で新規プロジェクト
-2. [`gas/Code.gs`](gas/Code.gs) を貼り付け
-3. エディタで **`setupReceiptAI`** を実行（シート・フォルダ自動作成）
+2. [`gas/Code.gs`](gas/Code.gs) を貼り付け。続けて **プロジェクトの設定** →「「appsscript.json」マニフェスト ファイルをエディタで表示する」をオンにし、[`gas/appsscript.json`](gas/appsscript.json) の内容（特に `oauthScopes`）を反映
+3. エディタで **`setupReceiptAI`** を実行（シート・フォルダ自動作成）。**権限の確認**でスプレッドシート／Drive を許可
 4. **デプロイ → ウェブアプリ**（実行:自分 / アクセス:**全員**）
 5. `/exec` URL をアプリ設定に保存
 6. コード変更後は必ず **新バージョン** で再デプロイ
+
+履歴読み込みで `SpreadsheetApp.openById` の権限エラーが出る場合:
+
+1. `gas/Code.gs` と `gas/appsscript.json` を最新に更新
+2. エディタで **`setupReceiptAI`** を再実行し、追加の権限をすべて許可
+3. デプロイ → ウェブアプリ → **新バージョン** で再デプロイ（URLは変わらないことが多い）
 
 ### 使い方
 

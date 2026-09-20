@@ -166,6 +166,27 @@ function taxRateOptionsHtml(selected) {
   `;
 }
 
+function syncShopNameDisplay() {
+  const btn = $('shopNameDisplay');
+  const input = $('shopName');
+  if (!btn || !input) return;
+  const v = (input.value || '').trim();
+  btn.textContent = v || '店舗名を入力';
+  btn.dataset.empty = v ? '0' : '1';
+}
+
+async function editShopName() {
+  const next = await openFieldModal({
+    title: '店舗名の編集',
+    label: '店舗名',
+    mode: 'text',
+    value: $('shopName').value
+  });
+  if (next === null) return;
+  $('shopName').value = next.trim();
+  syncShopNameDisplay();
+}
+
 function openFieldModal({ title, label, mode, value }) {
   return new Promise((resolve) => {
     const modal = $('fieldModal');
@@ -494,6 +515,7 @@ function showReceiptAt(index) {
   const items = r.items || [];
 
   $('shopName').value = shop;
+  syncShopNameDisplay();
   $('receiptDate').value = dateVal;
   renderItems(items);
 
@@ -580,6 +602,7 @@ function handleClear() {
   $('imageStatus').textContent = '写真を選ぶか、メモを入力してください';
   $('itemList').innerHTML = '';
   $('shopName').value = '';
+  syncShopNameDisplay();
   $('receiptDate').value = todayStr();
   calcTotal();
 }
@@ -815,7 +838,14 @@ async function handleRefreshHistory() {
     }
     $('historyList').appendChild(frag);
   } catch (err) {
-    $('historyStatus').textContent = `エラー: ${err.message}`;
+    const msg = String(err.message || err);
+    $('historyStatus').textContent = `エラー: ${msg}`;
+    if (/権限|openById|spreadsheets/i.test(msg)) {
+      showMessage(
+        'GASのスプレッドシート権限が不足しています。エディタで setupReceiptAI を実行して権限を許可し、ウェブアプリを「新バージョン」で再デプロイしてください。',
+        'error'
+      );
+    }
   }
 }
 
@@ -919,6 +949,7 @@ function registerServiceWorker() {
 
 function init() {
   $('receiptDate').value = todayStr();
+  syncShopNameDisplay();
   initTabs();
   initSettings();
   initImageInput();
@@ -936,6 +967,7 @@ function init() {
   $('manualSaveBtn').addEventListener('click', handleManualEdit);
   $('fetchModelsBtn').addEventListener('click', handleFetchModels);
   $('refreshHistoryBtn').addEventListener('click', handleRefreshHistory);
+  $('shopNameDisplay').addEventListener('click', editShopName);
   $('deleteApiKeyBtn').addEventListener('click', () => {
     if (!confirm('APIキーをこの端末から削除しますか？')) return;
     setApiKey('');

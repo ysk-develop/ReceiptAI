@@ -281,7 +281,8 @@ main {
 
 .form-row input,
 .form-row select,
-.form-row textarea {
+.form-row textarea,
+.form-row .form-control {
   width: 100%;
   padding: 0.65rem 0.75rem;
   border: 1px solid var(--border);
@@ -290,6 +291,7 @@ main {
   background: white;
   color: var(--text);
   font-family: inherit;
+  box-sizing: border-box;
 }
 
 .form-row textarea {
@@ -301,10 +303,29 @@ main {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 0.5rem;
+  align-items: end;
 }
 
 .form-grid .form-row {
   margin-bottom: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.form-grid .form-control,
+.form-grid input[type="date"],
+.form-grid .field-tap.form-control {
+  height: 2.75rem;
+  min-height: 2.75rem;
+  max-height: 2.75rem;
+  line-height: 1.25;
+  padding: 0 0.75rem !important;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  word-break: normal;
 }
 
 .checkbox-label {
@@ -611,7 +632,8 @@ main {
 }
 
 .i-name-display[data-empty="1"],
-.i-price-display[data-empty="1"] {
+.i-price-display[data-empty="1"],
+#shopNameDisplay[data-empty="1"] {
   color: var(--text-muted);
 }
 

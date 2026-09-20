@@ -55,7 +55,7 @@
 
       <div id="resultArea" class="hidden">
         <div class="card">
-          <h2>検出サマリー</h2>
+          <h2>解析結果</h2>
           <div id="detectedSummary" class="notice"></div>
           <div id="receiptNav" class="btn-row hidden" style="margin-top:0.75rem">
             <button type="button" id="prevReceiptBtn" class="btn btn-secondary">← 前のレシート</button>
@@ -68,17 +68,17 @@
           <h2>内容確認・修正</h2>
           <div class="form-grid">
             <div class="form-row">
-              <label for="shopName">店舗名</label>
-              <input type="text" id="shopName" placeholder="店舗名">
+              <label for="shopNameDisplay">店舗名</label>
+              <button type="button" id="shopNameDisplay" class="field-tap form-control" aria-label="店舗名を編集">店舗名を入力</button>
+              <input type="hidden" id="shopName" value="">
             </div>
             <div class="form-row">
               <label for="receiptDate">日付</label>
-              <input type="date" id="receiptDate">
+              <input type="date" id="receiptDate" class="form-control">
             </div>
           </div>
 
-          <p class="hint" style="margin-top:0.75rem">明細（税抜→設定税率で税込換算）。税率は行ごとに変更できます。</p>
-          <div class="item-head">
+          <div class="item-head" style="margin-top:0.75rem">
             <span>品目</span>
             <span>税抜</span>
             <span>税率</span>

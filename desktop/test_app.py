@@ -25,6 +25,23 @@ class DesktopAppTests(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication(sys.argv)
         cls.app.setStyleSheet(APP_STYLESHEET)
 
+    def setUp(self) -> None:
+        self._td = tempfile.TemporaryDirectory()
+        self._db = Path(self._td.name) / "test.db"
+        self._patches = [
+            patch("receiptai.db.DB_PATH", self._db),
+            patch("receiptai.config.DB_PATH", self._db),
+            patch("receiptai.app.DB_PATH", self._db),
+        ]
+        for p in self._patches:
+            p.start()
+        db.init_db(self._db)
+
+    def tearDown(self) -> None:
+        for p in self._patches:
+            p.stop()
+        self._td.cleanup()
+
     def test_stylesheet_cursorrules(self) -> None:
         self.assertIn("QComboBox::drop-down", APP_STYLESHEET)
         self.assertIn("QComboBox::down-arrow", APP_STYLESHEET)
@@ -34,13 +51,13 @@ class DesktopAppTests(unittest.TestCase):
         self.assertIn("QTableWidget QLineEdit", APP_STYLESHEET)
 
     def test_db_and_import(self) -> None:
-        db.init_db()
         digest = f"unittest_{date.today().isoformat()}_{os.getpid()}"
         rid, created = db.insert_receipt(
             "テスト店",
             date.today().isoformat(),
             [{"name": "牛乳", "price": 198, "category": "食費"}],
             source_hash=digest,
+            db_path=self._db,
         )
         self.assertTrue(created or rid > 0)
         rid2, created2 = db.insert_receipt(
@@ -48,6 +65,7 @@ class DesktopAppTests(unittest.TestCase):
             date.today().isoformat(),
             [{"name": "牛乳", "price": 198, "category": "食費"}],
             source_hash=digest,
+            db_path=self._db,
         )
         self.assertFalse(created2)
         self.assertEqual(rid, rid2)
@@ -60,6 +78,7 @@ class DesktopAppTests(unittest.TestCase):
             [{"name": "お茶", "price": 100, "category": "食費"}],
             image_file_id="img123",
             image_view_url="https://example.com/x",
+            db_path=self._db,
         )
         self.assertTrue(created3)
         rid4, created4 = db.upsert_cloud_receipt(
@@ -69,6 +88,7 @@ class DesktopAppTests(unittest.TestCase):
             [{"name": "お茶", "price": 120, "category": "食費"}],
             image_file_id="img123",
             image_view_url="https://example.com/x",
+            db_path=self._db,
         )
         self.assertFalse(created4)
         self.assertEqual(rid3, rid4)
@@ -89,10 +109,15 @@ class DesktopAppTests(unittest.TestCase):
             (folder / "receipt_x.json").write_text(
                 json.dumps(payload, ensure_ascii=False), encoding="utf-8"
             )
-            result = importer.import_folder(folder, archive=True)
+            with patch("receiptai.importer.db.DB_PATH", self._db):
+                result = importer.import_folder(folder, archive=True)
             self.assertEqual(result["imported"], 1)
             self.assertFalse((folder / "receipt_x.json").exists())
             self.assertTrue((folder / "_imported" / "receipt_x.json").exists())
+
+        n = db.clear_all_receipts(self._db)
+        self.assertGreaterEqual(n, 1)
+        self.assertEqual(len(db.list_receipts(db_path=self._db)), 0)
 
     def test_charts(self) -> None:
         c1 = charts.canvas_from_figure(charts.make_category_pie([("食費", 100)]))

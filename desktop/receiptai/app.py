@@ -807,7 +807,10 @@ class MainWindow(QMainWindow):
         t0 = QLabel("スプレッドシート連携（GAS）")
         t0.setObjectName("SectionTitle")
         v.addWidget(t0)
-        hint0 = QLabel("スマホと同じ GAS /exec URL。正本はスプレッドシート、PCはローカルSQLiteにキャッシュします。")
+        hint0 = QLabel(
+            "スマホと同じ GAS /exec URL。正本はスプレッドシートです。"
+            "PCの一覧はローカルキャッシュ（SQLite）なので、シートで消しても同期するまで残ることがあります。"
+        )
         hint0.setObjectName("Muted")
         hint0.setWordWrap(True)
         v.addWidget(hint0)
@@ -819,6 +822,19 @@ class MainWindow(QMainWindow):
         test_gas.clicked.connect(self.test_gas)
         grow.addWidget(test_gas)
         v.addLayout(grow)
+
+        clear_row = QHBoxLayout()
+        clear_btn = _btn("ローカル一覧を全消去", "DangerButton")
+        clear_btn.clicked.connect(self.clear_local_db)
+        clear_row.addWidget(clear_btn)
+        clear_row.addStretch(1)
+        v.addLayout(clear_row)
+        clear_hint = QLabel(
+            f"PC内のキャッシュ DB だけ消します（シートは消えません）。\n{DB_PATH}"
+        )
+        clear_hint.setObjectName("Muted")
+        clear_hint.setWordWrap(True)
+        v.addWidget(clear_hint)
 
         t1 = QLabel("（任意）旧JSON同期フォルダ")
         t1.setObjectName("SectionTitle")
@@ -937,6 +953,28 @@ class MainWindow(QMainWindow):
             )
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, "接続失敗", str(exc))
+
+    def clear_local_db(self) -> None:
+        reply = QMessageBox.question(
+            self,
+            "ローカル一覧の全消去",
+            "PC内のレシート一覧キャッシュをすべて削除しますか？\n"
+            "（スプレッドシート側のデータは消えません）\n\n"
+            f"{DB_PATH}",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        n = db.clear_all_receipts()
+        self._selected_id = None
+        self.refresh_all()
+        QMessageBox.information(
+            self,
+            "消去完了",
+            f"ローカルから {n} 件削除しました。\n"
+            "シートの内容を再取得する場合は「シートから同期」を押してください。",
+        )
 
     def delete_receipt_row(
         self,

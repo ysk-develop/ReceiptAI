@@ -258,6 +258,16 @@ def delete_receipt(receipt_id: int, db_path: Path | None = None) -> None:
         conn.execute("DELETE FROM receipts WHERE id = ?", (receipt_id,))
 
 
+def clear_all_receipts(db_path: Path | None = None) -> int:
+    """Delete all local receipts (and items via CASCADE). Returns deleted receipt count."""
+    with get_conn(db_path) as conn:
+        cur = conn.execute("SELECT COUNT(*) AS n FROM receipts")
+        n = int(cur.fetchone()["n"])
+        conn.execute("DELETE FROM items")
+        conn.execute("DELETE FROM receipts")
+        return n
+
+
 def delete_by_cloud_id(cloud_receipt_id: str, db_path: Path | None = None) -> int:
     """Delete local row matching cloud_receipt_id. Returns deleted count."""
     if not cloud_receipt_id:

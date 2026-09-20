@@ -94,6 +94,7 @@
             <span id="totalPrice" class="total-price">0 円</span>
           </div>
           <p id="receiptTotalHint" class="hint"></p>
+          <button id="adjustTotalBtn" class="btn btn-secondary btn-sm hidden">記載合計に合わせる（端数調整）</button>
 
           <button id="sendBtn" class="btn btn-success">☁ このレシートをシートへ保存</button>
           <button id="sendAllBtn" class="btn btn-secondary hidden">☁ 検出した全レシートを保存</button>
@@ -214,6 +215,22 @@
       </div>
       <img id="modalImg" alt="レシート画像">
       <p id="modalImgHint" class="hint"></p>
+    </div>
+  </div>
+
+  <div id="fieldModal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-backdrop" id="fieldModalBackdrop"></div>
+    <div class="modal-panel modal-panel-field">
+      <div class="modal-header">
+        <span id="fieldModalTitle">編集</span>
+        <button type="button" class="btn btn-secondary btn-sm" id="fieldModalCancel">取消</button>
+      </div>
+      <label class="hint" id="fieldModalLabel" for="fieldModalInput"></label>
+      <textarea id="fieldModalText" class="field-modal-input hidden" rows="4"></textarea>
+      <input id="fieldModalNumber" class="field-modal-input hidden" type="number" inputmode="numeric">
+      <div class="btn-row" style="margin-top:12px">
+        <button type="button" class="btn btn-primary" id="fieldModalOk">確定</button>
+      </div>
     </div>
   </div>
 

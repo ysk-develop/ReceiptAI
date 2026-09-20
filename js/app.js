@@ -9,7 +9,8 @@ import {
 } from './gemini-api.js';
 import { resizeImageFile } from './image-util.js';
 import {
-  getTaxSettings, saveTaxSettings, calcInclusive, normalizeRateType
+  getTaxSettings, saveTaxSettings, calcInclusive, normalizeRateType,
+  calcExclusiveFromIncl
 } from './tax.js';
 
 let imageData = null;
@@ -160,50 +161,207 @@ function taxRateOptionsHtml(selected) {
   const type = normalizeRateType(selected);
   const tax = getTaxSettings();
   return `
-    <option value="standard" ${type === 'standard' ? 'selected' : ''}>標準${tax.standard_rate}%</option>
-    <option value="reduced" ${type === 'reduced' ? 'selected' : ''}>軽減${tax.reduced_rate}%</option>
+    <option value="standard" ${type === 'standard' ? 'selected' : ''}>${tax.standard_rate}%</option>
+    <option value="reduced" ${type === 'reduced' ? 'selected' : ''}>${tax.reduced_rate}%</option>
   `;
 }
 
+function openFieldModal({ title, label, mode, value }) {
+  return new Promise((resolve) => {
+    const modal = $('fieldModal');
+    const textEl = $('fieldModalText');
+    const numEl = $('fieldModalNumber');
+    $('fieldModalTitle').textContent = title;
+    $('fieldModalLabel').textContent = label || '';
+
+    hide(textEl);
+    hide(numEl);
+    let active;
+    if (mode === 'text') {
+      show(textEl);
+      textEl.value = value ?? '';
+      active = textEl;
+    } else {
+      show(numEl);
+      numEl.value = value === '' || value == null ? '' : String(value);
+      active = numEl;
+    }
+
+    show(modal);
+    setTimeout(() => {
+      active.focus();
+      if (mode === 'text') textEl.setSelectionRange(textEl.value.length, textEl.value.length);
+      else numEl.select();
+    }, 50);
+
+    const finish = (result) => {
+      $('fieldModalOk').onclick = null;
+      $('fieldModalCancel').onclick = null;
+      $('fieldModalBackdrop').onclick = null;
+      textEl.onkeydown = null;
+      numEl.onkeydown = null;
+      hide(modal);
+      resolve(result);
+    };
+
+    const confirm = () => {
+      if (mode === 'text') finish(textEl.value);
+      else finish(numEl.value === '' ? '' : Number(numEl.value));
+    };
+    const onKey = (e) => {
+      if (e.key === 'Enter' && (mode === 'number' || !e.shiftKey)) {
+        e.preventDefault();
+        confirm();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        finish(null);
+      }
+    };
+    textEl.onkeydown = onKey;
+    numEl.onkeydown = onKey;
+
+    $('fieldModalOk').onclick = confirm;
+    $('fieldModalCancel').onclick = () => finish(null);
+    $('fieldModalBackdrop').onclick = () => finish(null);
+  });
+}
+
 function refreshRowIncl(row) {
+  const el = row.querySelector('.item-incl');
+  if (!el) return;
+  if (row.dataset.inclOverride !== undefined && row.dataset.inclOverride !== '') {
+    const incl = Number(row.dataset.inclOverride) || 0;
+    el.textContent = `${incl.toLocaleString()}`;
+    el.classList.add('is-override');
+    return;
+  }
   const excl = Number(row.querySelector('.i-price')?.value) || 0;
   const rateType = normalizeRateType(row.querySelector('.i-tax')?.value);
   const { incl } = calcInclusive(excl, rateType);
-  const el = row.querySelector('.item-incl');
-  if (el) el.textContent = `${incl.toLocaleString()}`;
+  el.textContent = `${incl.toLocaleString()}`;
+  el.classList.remove('is-override');
+}
+
+function rowInclValue(row) {
+  if (row.dataset.inclOverride !== undefined && row.dataset.inclOverride !== '') {
+    return Number(row.dataset.inclOverride) || 0;
+  }
+  const excl = Number(row.querySelector('.i-price')?.value) || 0;
+  const rateType = normalizeRateType(row.querySelector('.i-tax')?.value);
+  return calcInclusive(excl, rateType).incl;
 }
 
 function calcTotal() {
-  const tax = getTaxSettings();
   let exclSum = 0;
   let inclSum = 0;
   document.querySelectorAll('#itemList .item-row').forEach((row) => {
     refreshRowIncl(row);
-    const excl = Number(row.querySelector('.i-price')?.value) || 0;
-    const rateType = normalizeRateType(row.querySelector('.i-tax')?.value);
-    exclSum += excl;
-    inclSum += calcInclusive(excl, rateType, tax).incl;
+    exclSum += Number(row.querySelector('.i-price')?.value) || 0;
+    inclSum += rowInclValue(row);
   });
   $('totalPrice').textContent = `${inclSum.toLocaleString()} 円`;
+  updateAdjustButton(inclSum);
   return { exclSum, inclSum };
 }
 
-function addItemRow(name = '', price = '', category = '食費', taxRateType = '') {
+function updateAdjustButton(inclSum) {
+  const btn = $('adjustTotalBtn');
+  if (!btn || !analyzedReceipts.length) {
+    if (btn) hide(btn);
+    return;
+  }
+  const printed = Number(analyzedReceipts[currentReceiptIndex]?.total_amount) || 0;
+  if (printed > 0 && printed !== inclSum) {
+    show(btn);
+    btn.textContent = `記載合計 ${printed.toLocaleString()} 円に合わせる（差 ${printed - inclSum} 円）`;
+  } else {
+    hide(btn);
+  }
+}
+
+function addItemRow(name = '', price = '', category = '食費', taxRateType = '', inclOverride = null) {
   const tax = getTaxSettings();
   const rateType = normalizeRateType(taxRateType || tax.default_rate_type, tax);
   const row = document.createElement('div');
   row.className = 'item-row';
   const exclVal = price === '' || price == null ? '' : Number(price);
+  if (inclOverride != null && inclOverride !== '') {
+    row.dataset.inclOverride = String(inclOverride);
+  }
   row.innerHTML = `
-    <input class="i-name" type="text" value="${escapeHtml(name)}" placeholder="品目名">
-    <input class="i-price" type="number" inputmode="numeric" value="${exclVal}" placeholder="税抜">
+    <button type="button" class="field-tap i-name-display" aria-label="品名を編集"></button>
+    <input class="i-name hidden" type="hidden" value="${escapeHtml(name)}">
+    <button type="button" class="field-tap i-price-display" aria-label="税抜を編集"></button>
+    <input class="i-price hidden" type="hidden" value="${exclVal}">
     <select class="i-tax">${taxRateOptionsHtml(rateType)}</select>
-    <div class="item-incl">0</div>
+    <button type="button" class="field-tap item-incl" aria-label="税込を編集">0</button>
     <select class="i-cat">${categoryOptionsHtml(category)}</select>
     <button type="button" class="btn-icon" aria-label="行を削除">✕</button>
   `;
-  row.querySelector('.i-price').addEventListener('input', calcTotal);
-  row.querySelector('.i-tax').addEventListener('change', calcTotal);
+
+  const syncNameDisplay = () => {
+    const v = row.querySelector('.i-name').value;
+    const btn = row.querySelector('.i-name-display');
+    btn.textContent = v || '品名を入力';
+    btn.dataset.empty = v ? '0' : '1';
+  };
+  const syncPriceDisplay = () => {
+    const v = row.querySelector('.i-price').value;
+    const btn = row.querySelector('.i-price-display');
+    btn.textContent = v === '' ? '税抜' : Number(v).toLocaleString();
+    btn.dataset.empty = v === '' ? '1' : '0';
+  };
+  syncNameDisplay();
+  syncPriceDisplay();
+
+  row.querySelector('.i-name-display').addEventListener('click', async () => {
+    const next = await openFieldModal({
+      title: '品名の編集',
+      label: '品名',
+      mode: 'text',
+      value: row.querySelector('.i-name').value
+    });
+    if (next === null) return;
+    row.querySelector('.i-name').value = next;
+    syncNameDisplay();
+  });
+
+  row.querySelector('.i-price-display').addEventListener('click', async () => {
+    const next = await openFieldModal({
+      title: '税抜金額の編集',
+      label: '税抜（円）',
+      mode: 'number',
+      value: row.querySelector('.i-price').value
+    });
+    if (next === null) return;
+    delete row.dataset.inclOverride;
+    row.querySelector('.i-price').value = next === '' ? '' : String(Math.max(0, Math.round(Number(next) || 0)));
+    syncPriceDisplay();
+    calcTotal();
+  });
+
+  row.querySelector('.item-incl').addEventListener('click', async () => {
+    const current = rowInclValue(row);
+    const next = await openFieldModal({
+      title: '税込金額の編集',
+      label: '税込（円）※ここを直すと保存金額になります',
+      mode: 'number',
+      value: current
+    });
+    if (next === null) return;
+    const incl = Math.max(0, Math.round(Number(next) || 0));
+    const rateType = normalizeRateType(row.querySelector('.i-tax').value);
+    const { excl } = calcExclusiveFromIncl(incl, rateType);
+    row.querySelector('.i-price').value = String(excl);
+    row.dataset.inclOverride = String(incl);
+    syncPriceDisplay();
+    calcTotal();
+  });
+
+  row.querySelector('.i-tax').addEventListener('change', () => {
+    delete row.dataset.inclOverride;
+    calcTotal();
+  });
   row.querySelector('.btn-icon').addEventListener('click', () => {
     row.remove();
     calcTotal();
@@ -219,9 +377,10 @@ function renderItems(items = []) {
   else {
     items.forEach((item) => addItemRow(
       item.name,
-      item.price,
+      item.price_excl ?? item.price,
       item.category,
-      item.tax_rate_type
+      item.tax_rate_type,
+      item.incl_override
     ));
   }
 }
@@ -234,30 +393,36 @@ function collectItemsRaw() {
     const price_excl = Number(row.querySelector('.i-price').value) || 0;
     const tax_rate_type = normalizeRateType(row.querySelector('.i-tax').value);
     const category = row.querySelector('.i-cat').value;
-    if (name || price_excl > 0) {
+    const incl_override = row.dataset.inclOverride !== undefined && row.dataset.inclOverride !== ''
+      ? Number(row.dataset.inclOverride)
+      : null;
+    if (name || price_excl > 0 || (incl_override != null && incl_override !== 0)) {
       items.push({
         name: name || '（未入力）',
         price: price_excl,
         price_excl,
         tax_rate_type,
-        category
+        category,
+        incl_override
       });
     }
   });
   return items;
 }
 
-/** Collect for save: price = 税込（家計簿の正）, price_excl も付与 */
+/** Collect for save: price = 税込（家計簿の正） */
 function collectItemsForSave() {
   const tax = getTaxSettings();
   return collectItemsRaw().map((it) => {
-    const { incl, rate } = calcInclusive(it.price_excl, it.tax_rate_type, tax);
+    const rateType = normalizeRateType(it.tax_rate_type, tax);
+    const { incl, rate } = calcInclusive(it.price_excl, rateType, tax);
+    const price = it.incl_override != null ? Number(it.incl_override) : incl;
     return {
       name: it.name,
-      price: incl,
+      price,
       price_excl: it.price_excl,
       tax_rate: rate,
-      tax_rate_type: it.tax_rate_type,
+      tax_rate_type: rateType,
       category: it.category
     };
   });
@@ -265,6 +430,40 @@ function collectItemsForSave() {
 
 function collectItems() {
   return collectItemsRaw();
+}
+
+function adjustToPrintedTotal() {
+  if (!analyzedReceipts.length) return;
+  const printed = Number(analyzedReceipts[currentReceiptIndex]?.total_amount) || 0;
+  if (!printed) {
+    showMessage('このレシートに記載合計がありません');
+    return;
+  }
+  const { inclSum } = calcTotal();
+  const diff = printed - inclSum;
+  if (diff === 0) {
+    showMessage('すでに記載合計と一致しています', 'success');
+    return;
+  }
+
+  // Reuse existing 端数調整 row if present
+  let adjusted = false;
+  document.querySelectorAll('#itemList .item-row').forEach((row) => {
+    if (row.querySelector('.i-name')?.value === '端数調整') {
+      const cur = rowInclValue(row);
+      const next = cur + diff;
+      row.dataset.inclOverride = String(next);
+      row.querySelector('.i-price').value = '0';
+      row.querySelector('.i-price-display').textContent = '0';
+      adjusted = true;
+    }
+  });
+  if (!adjusted) {
+    addItemRow('端数調整', 0, 'その他', 'standard', diff);
+  } else {
+    calcTotal();
+  }
+  showMessage(`端数調整 ${diff > 0 ? '+' : ''}${diff} 円を反映しました`, 'success');
 }
 
 function openEditor(parsed) {
@@ -308,10 +507,10 @@ function showReceiptAt(index) {
     (printedTotal > 0
       ? `<br><b>レシート記載合計（参考）:</b> ${printedTotal.toLocaleString()} 円` +
         (Math.abs(diff) > 0
-          ? `（換算との差 ${diff > 0 ? '+' : ''}${diff.toLocaleString()} 円 ※端数は手修正可）`
-          : '')
+          ? `（差 ${diff > 0 ? '+' : ''}${diff.toLocaleString()} 円）`
+          : '（一致）')
       : '') +
-    `<br><span class="hint">保存する金額は税込換算です。税率は設定または行の税率で変更できます。</span>`;
+    `<br><span class="hint">品名・税抜・税込をタップすると拡大編集できます。差額は「記載合計に合わせる」が便利です。</span>`;
 
   const hint = $('receiptTotalHint');
   if (hint) {
@@ -733,6 +932,7 @@ function init() {
   $('sendAllBtn').addEventListener('click', handleSendAll);
   $('prevReceiptBtn').addEventListener('click', goPrevReceipt);
   $('nextReceiptBtn').addEventListener('click', goNextReceipt);
+  $('adjustTotalBtn').addEventListener('click', adjustToPrintedTotal);
   $('manualSaveBtn').addEventListener('click', handleManualEdit);
   $('fetchModelsBtn').addEventListener('click', handleFetchModels);
   $('refreshHistoryBtn').addEventListener('click', handleRefreshHistory);

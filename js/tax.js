@@ -45,7 +45,7 @@ export function ratePercentForType(type, settings = getTaxSettings()) {
  * @returns {{ tax: number, incl: number, rate: number }}
  */
 export function calcInclusive(priceExcl, rateType = 'standard', settings = getTaxSettings()) {
-  const excl = Math.max(0, Number(priceExcl) || 0);
+  const excl = Math.max(0, Math.round(Number(priceExcl) || 0));
   const rate = ratePercentForType(rateType, settings);
   let tax;
   if (settings.rounding === 'round') {
@@ -54,6 +54,23 @@ export function calcInclusive(priceExcl, rateType = 'standard', settings = getTa
     tax = Math.floor((excl * rate) / 100 + 1e-9);
   }
   return { tax, incl: excl + tax, rate };
+}
+
+/** 税込から税抜を逆算（切り捨てベースで近似） */
+export function calcExclusiveFromIncl(priceIncl, rateType = 'standard', settings = getTaxSettings()) {
+  const incl = Math.max(0, Math.round(Number(priceIncl) || 0));
+  const rate = ratePercentForType(rateType, settings);
+  if (rate <= 0) return { excl: incl, tax: 0, rate };
+  // excl = floor(incl * 100 / (100+rate)) then adjust so floor tax matches when possible
+  let excl = Math.floor((incl * 100) / (100 + rate));
+  while (excl < incl && calcInclusive(excl, rateType, settings).incl < incl) {
+    excl += 1;
+  }
+  while (excl > 0 && calcInclusive(excl, rateType, settings).incl > incl) {
+    excl -= 1;
+  }
+  const { tax } = calcInclusive(excl, rateType, settings);
+  return { excl, tax, rate };
 }
 
 export function normalizeRateType(value, settings = getTaxSettings()) {

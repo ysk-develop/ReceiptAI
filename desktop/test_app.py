@@ -126,7 +126,8 @@ class DesktopAppTests(unittest.TestCase):
         # remove row via button
         win._add_item_row("パン", 120, "食費")
         self.assertEqual(win.items_table.rowCount(), 2)
-        btn = win.items_table.cellWidget(1, 3)
+        btn = win.items_table.cellWidget(1, 5)
+        self.assertIsNotNone(btn)
         btn.click()
         self.assertEqual(win.items_table.rowCount(), 1)
         win.close()

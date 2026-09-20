@@ -24,41 +24,44 @@ export async function fetchModels(apiKey) {
     .filter((m) => /gemini/i.test(m.id));
 }
 
-const RECEIPT_ITEM_SCHEMA = {
+/**
+ * Flat line schema: models extract ALL items reliably this way,
+ * then we group by receipt_index into separate receipts.
+ */
+const LINE_SCHEMA = {
   type: 'object',
   properties: {
-    name: { type: 'string', description: '品目名（小計・税・合計行は含めない）' },
+    receipt_index: {
+      type: 'integer',
+      description: '画像内のレシート番号（左から1,2,3...）。同じ紙は同じ番号'
+    },
+    shop_name: { type: 'string', description: 'そのレシートの店舗名' },
+    date: { type: 'string', description: 'そのレシートの日付 YYYY-MM-DD' },
+    total_amount: {
+      type: 'number',
+      description: 'そのレシートの税込合計（同じreceipt_indexでは同値）'
+    },
+    name: { type: 'string', description: '品目名（小計・税・合計行は出さない）' },
     price: { type: 'number', description: '税込金額（円）' },
     category: { type: 'string' }
   },
-  required: ['name', 'price', 'category']
+  required: ['receipt_index', 'shop_name', 'date', 'total_amount', 'name', 'price', 'category']
 };
 
-const SINGLE_RECEIPT_SCHEMA = {
-  type: 'object',
-  properties: {
-    shop_name: { type: 'string', description: 'そのレシートの店舗名' },
-    date: { type: 'string', description: 'そのレシートの日付 YYYY-MM-DD' },
-    total_amount: { type: 'number', description: 'レシート記載の税込合計金額' },
-    items: {
-      type: 'array',
-      items: RECEIPT_ITEM_SCHEMA
-    }
-  },
-  required: ['shop_name', 'date', 'total_amount', 'items']
-};
-
-/** Multi-receipt friendly schema (1 image may contain several receipts). */
 const RECEIPT_SCHEMA = {
   type: 'object',
   properties: {
-    receipts: {
+    receipt_count: {
+      type: 'integer',
+      description: '画像に写っている紙のレシート枚数'
+    },
+    lines: {
       type: 'array',
-      description: '画像内のレシートごと（店舗・日付が違うものは必ず分ける）',
-      items: SINGLE_RECEIPT_SCHEMA
+      description: '全レシートの全品目（漏れなく）。receipt_index で所属レシートを示す',
+      items: LINE_SCHEMA
     }
   },
-  required: ['receipts']
+  required: ['receipt_count', 'lines']
 };
 
 function buildPrompt(today, memo) {
@@ -66,30 +69,83 @@ function buildPrompt(today, memo) {
   let text = `あなたは優秀な家計簿アシスタントです。
 日本の家計簿では「実際に支払った税込金額」を記録します。
 
-【金額ルール・最重要】
-- 各品目の price は必ず税込（円）にしてください。
-- レシートに税抜単価と税込合計がある場合、品目は税込に換算し、合計はレシートの「合計／税込合計／お会計」行の金額を total_amount に入れてください。
-- 税抜のまま合計しないでください。小計・消費税・内税・外税・合計の行自体は items に入れないでください。
-- 値引き行がある場合は負の金額、または対象品目から差し引いた税込額にしてください。
+【最重要・複数レシート】
+- まず画像に「紙のレシート」が何枚あるか数え、receipt_count にその枚数を入れてください。
+- 左右（または上下）に並ぶレシートはすべて別番号です（1,2,3...）。
+- 同じ店舗名・同じ日でも、紙が別なら別の receipt_index にしてください。
+- lines には全レシートの全品目を漏れなく出してください。1枚分だけ出力するのは誤りです（写真に1枚しかない場合を除く）。
+- 各行に shop_name / date / total_amount をそのレシートのもので繰り返してください。
 
-【複数レシート・最重要】
-- 1枚の写真に複数のレシートがある場合、receipts 配列の要素をレシート枚数分作ってください。
-- 店舗名・日付が異なるレシートを1つにまとめないでください。
-- 各レシートごとに shop_name / date / total_amount / items を独立して設定してください。
-- 日付が読めないレシートだけ ${today} を使い、読める日付は必ずその日付にしてください。
-- 店舗名が読めない場合のみ「不明」。
+【金額】
+- price と total_amount は税込（円）。
+- 税抜単価のときは税込に換算。合計は「合計／お会計」の税込額。
+- 小計・消費税・内税・外税・合計の行は lines に入れない。
 
 カテゴリは次から選択: [${categoryList}]
-JSONのみ出力してください。`;
+不明な日付のみ ${today} を使う。店舗名が読めないときのみ「不明」。
+JSONのみ出力。`;
   if (memo) text += `\n\n【入力メモ】\n${memo}`;
   return text;
 }
 
+function buildRetryPrompt(today, expectedCount, gotCount) {
+  return `前回の抽出では receipt_count=${expectedCount} なのに lines から再構成したレシートが ${gotCount} 枚しかありませんでした。
+画像内の紙レシートを左から右へすべて再抽出し、receipt_count 枚ぶんの品目を lines に出力してください。
+金額は税込。小計・税・合計行は lines に入れない。日付不明のみ ${today}。
+JSONのみ。`;
+}
+
 /**
- * Normalize model output to { receipts: [...] }.
- * Also accepts legacy single-receipt shape.
+ * Group flat lines (or legacy receipts[]) into receipt objects.
  */
 export function normalizeAnalysisResult(parsed, today = new Date().toISOString().slice(0, 10)) {
+  // New flat format
+  if (parsed && Array.isArray(parsed.lines) && parsed.lines.length) {
+    const groups = new Map();
+    for (const line of parsed.lines) {
+      const idx = Number(line.receipt_index) || 1;
+      if (!groups.has(idx)) {
+        let dateStr = String(line.date || '').trim();
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) dateStr = today;
+        groups.set(idx, {
+          shop_name: String(line.shop_name || '不明').trim() || '不明',
+          date: dateStr,
+          total_amount: Number(line.total_amount) || 0,
+          items: []
+        });
+      }
+      const g = groups.get(idx);
+      const name = String(line.name || '').trim();
+      const price = Number(line.price) || 0;
+      if (!name && !price) continue;
+      // skip tax/total-like rows if model still emits them
+      if (/^(小計|合計|税|消費税|内税|外税|お預り|お釣り|お会計)/.test(name)) continue;
+      g.items.push({
+        name: name || '（未入力）',
+        price,
+        category: String(line.category || 'その他')
+      });
+      if (Number(line.total_amount) > 0) g.total_amount = Number(line.total_amount);
+      if (line.shop_name) g.shop_name = String(line.shop_name).trim() || g.shop_name;
+      if (line.date && /^\d{4}-\d{2}-\d{2}$/.test(String(line.date).trim())) {
+        g.date = String(line.date).trim();
+      }
+    }
+
+    const list = [...groups.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([, r], i) => {
+        const itemsSum = r.items.reduce((s, it) => s + it.price, 0);
+        let total = Number(r.total_amount);
+        if (!Number.isFinite(total) || total <= 0) total = itemsSum;
+        return { ...r, total_amount: total, _index: i };
+      })
+      .filter((r) => r.items.length > 0);
+
+    return list;
+  }
+
+  // Legacy receipts[] format
   let list = [];
   if (parsed && Array.isArray(parsed.receipts) && parsed.receipts.length) {
     list = parsed.receipts;
@@ -121,24 +177,17 @@ export function normalizeAnalysisResult(parsed, today = new Date().toISOString()
   }).filter((r) => r.items.length > 0);
 }
 
-export async function analyzeReceipt(apiKey, model, { base64Data, mimeType, memo }) {
+async function callGeminiJson(apiKey, model, parts, schema) {
   const url = `${API_BASE}/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
-  const today = new Date().toISOString().slice(0, 10);
-  const parts = [];
-  if (base64Data) {
-    parts.push({ inlineData: { mimeType: mimeType || 'image/jpeg', data: base64Data } });
-  }
-  parts.push({ text: buildPrompt(today, memo) });
-  if (parts.length === 1 && !memo) throw new Error('画像またはメモが必要です');
-
   const body = {
     contents: [{ parts }],
     generationConfig: {
       responseMimeType: 'application/json',
-      responseSchema: RECEIPT_SCHEMA
+      responseSchema: schema,
+      maxOutputTokens: 8192,
+      temperature: 0.1
     }
   };
-
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -149,12 +198,44 @@ export async function analyzeReceipt(apiKey, model, { base64Data, mimeType, memo
     throw new Error(`レシート解析失敗 (${res.status}): ${err}`);
   }
   const data = await res.json();
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+  const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '';
   if (!text) throw new Error('AIからの応答が空です');
-  const parsed = JSON.parse(text);
-  const receipts = normalizeAnalysisResult(parsed, today);
+  return JSON.parse(text);
+}
+
+export async function analyzeReceipt(apiKey, model, { base64Data, mimeType, memo }) {
+  const today = new Date().toISOString().slice(0, 10);
+  const mediaParts = [];
+  if (base64Data) {
+    mediaParts.push({ inlineData: { mimeType: mimeType || 'image/jpeg', data: base64Data } });
+  }
+  if (mediaParts.length === 0 && !memo) throw new Error('画像またはメモが必要です');
+
+  const firstParts = [...mediaParts, { text: buildPrompt(today, memo) }];
+  let parsed = await callGeminiJson(apiKey, model, firstParts, RECEIPT_SCHEMA);
+  let receipts = normalizeAnalysisResult(parsed, today);
+  const declared = Number(parsed.receipt_count) || 0;
+
+  // Retry once if model declared more receipts than it returned
+  if (declared > receipts.length && base64Data) {
+    const retryParts = [
+      ...mediaParts,
+      {
+        text: buildRetryPrompt(today, declared, receipts.length) +
+          (memo ? `\n\n【入力メモ】\n${memo}` : '')
+      }
+    ];
+    parsed = await callGeminiJson(apiKey, model, retryParts, RECEIPT_SCHEMA);
+    const retried = normalizeAnalysisResult(parsed, today);
+    if (retried.length >= receipts.length) receipts = retried;
+  }
+
   if (!receipts.length) throw new Error('レシートを検出できませんでした');
-  return { receipts, raw: parsed };
+  return {
+    receipts,
+    raw: parsed,
+    receipt_count_declared: declared || receipts.length
+  };
 }
 
 export function normalizeGasUrl(url) {

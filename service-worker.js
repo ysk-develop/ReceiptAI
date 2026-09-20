@@ -1,4 +1,4 @@
-const CACHE_NAME = 'receipt-ai-v4';
+const CACHE_NAME = 'receipt-ai-v5';
 const ASSETS = [
   './',
   './index.html',

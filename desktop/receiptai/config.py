@@ -10,6 +10,7 @@ CONFIG_PATH = APP_DIR / "config.json"
 DB_PATH = APP_DIR / "receipts.db"
 
 DEFAULT_CONFIG = {
+    "gas_url": "",
     "sync_folder": "",
     "gemini_api_key": "",
     "gemini_model": "gemini-2.0-flash",

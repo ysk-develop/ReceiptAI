@@ -1,36 +1,40 @@
 /**
- * Google Apps Script — レシート JSON 受け口
+ * ReceiptAI — Google Apps Script
+ * 正本: スプレッドシート / 画像: Drive(images) / API: doPost + doGet(JSONP可)
  *
- * 【重要】コードを変えたら必ず「デプロイ → デプロイを管理 → 編集 → 新バージョン」で再デプロイしてください。
+ * 【セットアップ】
+ * 1. このコードを貼付け
+ * 2. 初回はエディタで setupReceiptAI() を実行（シート・フォルダ作成）
+ * 3. デプロイ → ウェブアプリ（実行:自分 / アクセス:全員）
+ * 4. /exec URL をスマホ・PCアプリに設定
+ * 5. コード変更後は必ず「新バージョン」で再デプロイ
  *
- * 使い方:
- * 1. script.google.com で新規プロジェクトを作成
- * 2. このファイルの内容を貼り付け
- * 3. （任意）FOLDER_ID を保存先フォルダの ID に変更。空のままなら「ReceiptAI」フォルダを自動作成
- * 4. デプロイ → 新しいデプロイ → ウェブアプリ
- *    - 実行ユーザー: 自分
- *    - アクセスできるユーザー: 全員（「Google アカウントを持つユーザー」ではなく「全員」）
- * 5. 発行された URL（末尾 /exec）を ReceiptAI の設定に保存
- *
- * 動作確認: ブラウザでその URL を開くと {"status":"ok","app":"ReceiptAI",...} と出ればOK
+ * 任意: SPREADSHEET_ID / FOLDER_ID を固定したい場合のみ下に記入
  */
-
-/** 空文字のままなら My Drive に「ReceiptAI」フォルダを自動作成／利用します */
+var SPREADSHEET_ID = '';
 var FOLDER_ID = '';
+var SHEET_NAME = 'receipts';
+var HEADERS = [
+  'created_at',
+  'receipt_id',
+  'date',
+  'shop_name',
+  'total_amount',
+  'item_name',
+  'price',
+  'category',
+  'image_file_id',
+  'image_view_url'
+];
 
 function doPost(e) {
   try {
     var data = parseIncoming_(e);
-    var folder = getTargetFolder_();
-    var fileName = buildFileName_(data);
-    folder.createFile(fileName, JSON.stringify(data, null, 2), MimeType.PLAIN_TEXT);
-
-    return jsonOut_({
-      status: 'success',
-      fileName: fileName,
-      folderName: folder.getName(),
-      folderUrl: folder.getUrl()
-    });
+    var action = data.action || 'save';
+    if (action === 'save') {
+      return respond_(e, saveReceipt_(data));
+    }
+    return respond_(e, { status: 'error', message: 'unknown action: ' + action });
   } catch (err) {
     try {
       DriveApp.getRootFolder().createFile(
@@ -39,87 +43,324 @@ function doPost(e) {
         MimeType.PLAIN_TEXT
       );
     } catch (_) {}
-    return jsonOut_({ status: 'error', message: String(err) });
+    return respond_(e, { status: 'error', message: String(err) });
   }
 }
 
 function doGet(e) {
-  var ping = e && e.parameter && e.parameter.ping;
-  if (ping === '1') {
-    try {
-      var folder = getTargetFolder_();
-      return jsonOut_({
-        status: 'ok',
-        app: 'ReceiptAI',
-        folderName: folder.getName(),
-        folderUrl: folder.getUrl(),
-        folderId: folder.getId()
-      });
-    } catch (err) {
-      return jsonOut_({ status: 'error', message: String(err) });
+  try {
+    var p = (e && e.parameter) || {};
+    var action = p.action || (p.ping === '1' ? 'ping' : 'ping');
+    var result;
+    if (action === 'ping') {
+      result = ping_();
+    } else if (action === 'list') {
+      result = listReceipts_(p.month || '', Number(p.limit || 50));
+    } else if (action === 'receipt') {
+      result = getReceipt_(p.id || '');
+    } else if (action === 'image') {
+      result = getImageMeta_(p.id || '');
+    } else {
+      result = { status: 'error', message: 'unknown action' };
+    }
+    return respond_(e, result);
+  } catch (err) {
+    return respond_(e, { status: 'error', message: String(err) });
+  }
+}
+
+/** 初回セットアップ（エディタから実行） */
+function setupReceiptAI() {
+  var folder = getRootFolder_();
+  var images = getImagesFolder_();
+  var ss = getSpreadsheet_();
+  var sheet = getSheet_();
+  Logger.log('folder=' + folder.getUrl());
+  Logger.log('images=' + images.getUrl());
+  Logger.log('spreadsheet=' + ss.getUrl());
+  Logger.log('sheet=' + sheet.getName() + ' rows=' + sheet.getLastRow());
+}
+
+function testWrite() {
+  var result = saveReceipt_({
+    shop_name: 'テスト店',
+    date: Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd'),
+    total_amount: 100,
+    items: [{ name: 'テスト品', price: 100, category: 'その他' }]
+  });
+  Logger.log(JSON.stringify(result));
+}
+
+function ping_() {
+  var folder = getRootFolder_();
+  var images = getImagesFolder_();
+  var ss = getSpreadsheet_();
+  return {
+    status: 'ok',
+    app: 'ReceiptAI',
+    mode: 'spreadsheet',
+    folderName: folder.getName(),
+    folderUrl: folder.getUrl(),
+    imagesFolderUrl: images.getUrl(),
+    spreadsheetUrl: ss.getUrl(),
+    spreadsheetId: ss.getId(),
+    sheetName: SHEET_NAME
+  };
+}
+
+function saveReceipt_(data) {
+  var items = data.items || [];
+  if (!items.length) throw new Error('明細が空です');
+  var dateStr = String(data.date || '').trim();
+  if (!dateStr) throw new Error('日付がありません');
+
+  var shop = String(data.shop_name || '不明');
+  var total = Number(data.total_amount);
+  if (!total) {
+    total = 0;
+    for (var i = 0; i < items.length; i++) total += Number(items[i].price || 0);
+  }
+
+  var receiptId = String(data.receipt_id || Utilities.getUuid());
+  var createdAt = data.timestamp || new Date().toISOString();
+  var imageInfo = saveImageIfPresent_(data, receiptId, shop);
+
+  var sheet = getSheet_();
+  var rows = [];
+  for (var j = 0; j < items.length; j++) {
+    var it = items[j] || {};
+    rows.push([
+      createdAt,
+      receiptId,
+      dateStr,
+      shop,
+      total,
+      String(it.name || '（未入力）'),
+      Number(it.price || 0),
+      String(it.category || 'その他'),
+      imageInfo.fileId || '',
+      imageInfo.viewUrl || ''
+    ]);
+  }
+  sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, HEADERS.length).setValues(rows);
+
+  return {
+    status: 'success',
+    receipt_id: receiptId,
+    rows: rows.length,
+    image_file_id: imageInfo.fileId || '',
+    image_view_url: imageInfo.viewUrl || '',
+    spreadsheetUrl: getSpreadsheet_().getUrl()
+  };
+}
+
+function listReceipts_(month, limit) {
+  limit = Math.min(Math.max(limit || 50, 1), 200);
+  var sheet = getSheet_();
+  var last = sheet.getLastRow();
+  if (last < 2) return { status: 'ok', receipts: [] };
+
+  var values = sheet.getRange(2, 1, last - 1, HEADERS.length).getValues();
+  var map = {};
+  for (var i = 0; i < values.length; i++) {
+    var row = values[i];
+    var rid = String(row[1] || '');
+    if (!rid) continue;
+    var dateStr = String(row[2] || '');
+    if (month && dateStr.indexOf(month) !== 0) continue;
+    if (!map[rid]) {
+      map[rid] = {
+        receipt_id: rid,
+        created_at: String(row[0] || ''),
+        date: dateStr,
+        shop_name: String(row[3] || ''),
+        total_amount: Number(row[4] || 0),
+        image_file_id: String(row[8] || ''),
+        image_view_url: String(row[9] || ''),
+        item_count: 0
+      };
+    }
+    map[rid].item_count += 1;
+    if (!map[rid].image_file_id && row[8]) {
+      map[rid].image_file_id = String(row[8]);
+      map[rid].image_view_url = String(row[9] || '');
     }
   }
-  return jsonOut_({ status: 'ok', app: 'ReceiptAI', hint: 'Add ?ping=1 to verify Drive folder access' });
+
+  var list = [];
+  for (var k in map) list.push(map[k]);
+  list.sort(function (a, b) {
+    if (a.date === b.date) return a.created_at < b.created_at ? 1 : -1;
+    return a.date < b.date ? 1 : -1;
+  });
+  return { status: 'ok', receipts: list.slice(0, limit) };
 }
 
-/** エディタから直接実行して Drive 書き込みを確認できます */
-function testWrite() {
-  var folder = getTargetFolder_();
-  var name = 'receipt_test_' + Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyyMMdd_HHmmss') + '.json';
-  folder.createFile(name, JSON.stringify({ test: true, at: new Date().toISOString() }, null, 2), MimeType.PLAIN_TEXT);
-  Logger.log('Wrote ' + name + ' to ' + folder.getUrl());
-}
+function getReceipt_(receiptId) {
+  if (!receiptId) throw new Error('id が空です');
+  var sheet = getSheet_();
+  var last = sheet.getLastRow();
+  if (last < 2) return { status: 'error', message: 'not found' };
 
-function getTargetFolder_() {
-  if (FOLDER_ID && FOLDER_ID.indexOf('ここに') === -1) {
-    return DriveApp.getFolderById(FOLDER_ID);
+  var values = sheet.getRange(2, 1, last - 1, HEADERS.length).getValues();
+  var items = [];
+  var meta = null;
+  for (var i = 0; i < values.length; i++) {
+    var row = values[i];
+    if (String(row[1]) !== receiptId) continue;
+    if (!meta) {
+      meta = {
+        receipt_id: receiptId,
+        created_at: String(row[0] || ''),
+        date: String(row[2] || ''),
+        shop_name: String(row[3] || ''),
+        total_amount: Number(row[4] || 0),
+        image_file_id: String(row[8] || ''),
+        image_view_url: String(row[9] || '')
+      };
+    }
+    items.push({
+      name: String(row[5] || ''),
+      price: Number(row[6] || 0),
+      category: String(row[7] || 'その他')
+    });
   }
+  if (!meta) return { status: 'error', message: 'not found' };
+  meta.items = items;
+  meta.status = 'ok';
+  return meta;
+}
+
+function getImageMeta_(fileId) {
+  if (!fileId) throw new Error('image id が空です');
+  var file = DriveApp.getFileById(fileId);
+  return {
+    status: 'ok',
+    file_id: fileId,
+    name: file.getName(),
+    mime: file.getMimeType(),
+    view_url: 'https://drive.google.com/uc?export=view&id=' + fileId,
+    download_url: file.getDownloadUrl()
+  };
+}
+
+function saveImageIfPresent_(data, receiptId, shop) {
+  var b64 = data.image_base64 || data.imageBase64 || '';
+  if (!b64) return { fileId: '', viewUrl: '' };
+
+  // data URL 形式なら除去
+  var mime = data.image_mime || data.imageMime || 'image/jpeg';
+  var m = String(b64).match(/^data:([^;]+);base64,(.+)$/);
+  if (m) {
+    mime = m[1];
+    b64 = m[2];
+  }
+
+  var bytes = Utilities.base64Decode(b64);
+  var blob = Utilities.newBlob(bytes, mime, buildImageName_(receiptId, shop));
+  var file = getImagesFolder_().createFile(blob);
+  // リンクを知っている人は閲覧可（imgタグ表示用）。ファイルIDは推測困難
+  file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  var viewUrl = 'https://drive.google.com/uc?export=view&id=' + file.getId();
+  return { fileId: file.getId(), viewUrl: viewUrl };
+}
+
+function buildImageName_(receiptId, shop) {
+  var safe = String(shop || 'receipt').replace(/[\\/:*?"<>|]/g, '_');
+  return 'receipt_' + receiptId.slice(0, 8) + '_' + safe + '.jpg';
+}
+
+function getRootFolder_() {
+  if (FOLDER_ID) return DriveApp.getFolderById(FOLDER_ID);
   var it = DriveApp.getFoldersByName('ReceiptAI');
   if (it.hasNext()) return it.next();
   return DriveApp.createFolder('ReceiptAI');
 }
 
+function getImagesFolder_() {
+  var root = getRootFolder_();
+  var it = root.getFoldersByName('images');
+  if (it.hasNext()) return it.next();
+  return root.createFolder('images');
+}
+
+function getSpreadsheet_() {
+  if (SPREADSHEET_ID) return SpreadsheetApp.openById(SPREADSHEET_ID);
+  var root = getRootFolder_();
+  var files = root.getFilesByName('ReceiptAI');
+  while (files.hasNext()) {
+    var f = files.next();
+    if (f.getMimeType() === MimeType.GOOGLE_SHEETS) {
+      return SpreadsheetApp.open(f);
+    }
+  }
+  var ss = SpreadsheetApp.create('ReceiptAI');
+  var file = DriveApp.getFileById(ss.getId());
+  root.addFile(file);
+  try {
+    DriveApp.getRootFolder().removeFile(file);
+  } catch (_) {}
+  return ss;
+}
+
+function getSheet_() {
+  var ss = getSpreadsheet_();
+  var sheet = ss.getSheetByName(SHEET_NAME);
+  if (!sheet) sheet = ss.insertSheet(SHEET_NAME);
+  if (sheet.getLastRow() === 0) {
+    sheet.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
+    sheet.setFrozenRows(1);
+  } else {
+    // ヘッダーが古い場合は先頭行を更新しない（既存データ保護）
+    var first = sheet.getRange(1, 1, 1, HEADERS.length).getValues()[0];
+    if (String(first[0]) !== HEADERS[0]) {
+      sheet.insertRowBefore(1);
+      sheet.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
+      sheet.setFrozenRows(1);
+    }
+  }
+  // 不要な Sheet1 を残さない
+  var sheets = ss.getSheets();
+  if (sheets.length > 1) {
+    for (var i = 0; i < sheets.length; i++) {
+      if (sheets[i].getName() !== SHEET_NAME && sheets[i].getLastRow() <= 1) {
+        try { ss.deleteSheet(sheets[i]); } catch (_) {}
+      }
+    }
+  }
+  return sheet;
+}
+
 function parseIncoming_(e) {
   if (!e) throw new Error('リクエスト本体が空です');
-
-  // text/plain JSON body（アプリからの通常送信）
   if (e.postData && e.postData.contents) {
     var contents = e.postData.contents;
     try {
       return JSON.parse(contents);
     } catch (err1) {
-      // application/x-www-form-urlencoded: data=...
-      var form = e.parameter || {};
-      if (form.data) return JSON.parse(form.data);
+      if (e.parameter && e.parameter.data) return JSON.parse(e.parameter.data);
       throw new Error('JSONの解析に失敗: ' + String(err1));
     }
   }
+  if (e.parameter && e.parameter.data) return JSON.parse(e.parameter.data);
+  throw new Error('postData も parameter.data もありません');
+}
 
-  // form / query
-  if (e.parameter && e.parameter.data) {
-    return JSON.parse(e.parameter.data);
+function respond_(e, obj) {
+  var callback = e && e.parameter && e.parameter.callback;
+  var text = JSON.stringify(obj);
+  if (callback) {
+    return ContentService
+      .createTextOutput(String(callback) + '(' + text + ')')
+      .setMimeType(ContentService.MimeType.JAVASCRIPT);
   }
-
-  throw new Error('postData も parameter.data もありません。デプロイ設定（全員アクセス）を確認してください。');
-}
-
-function buildFileName_(data) {
-  var now = new Date();
-  var timeStr = Utilities.formatDate(now, 'Asia/Tokyo', 'yyyyMMdd_HHmmss');
-  var shop = String((data && data.shop_name) || 'unknown').replace(/[\\/:*?"<>|]/g, '_');
-  return 'receipt_' + timeStr + '_' + shop + '.json';
-}
-
-function jsonOut_(obj) {
-  return ContentService
-    .createTextOutput(JSON.stringify(obj))
-    .setMimeType(ContentService.MimeType.JSON);
+  return ContentService.createTextOutput(text).setMimeType(ContentService.MimeType.JSON);
 }
 
 function safeRaw_(e) {
   try {
-    if (e && e.postData && e.postData.contents) return e.postData.contents.slice(0, 2000);
-    if (e && e.parameter) return JSON.stringify(e.parameter).slice(0, 2000);
+    if (e && e.postData && e.postData.contents) return e.postData.contents.slice(0, 500);
+    if (e && e.parameter) return JSON.stringify(e.parameter).slice(0, 500);
   } catch (_) {}
   return '(none)';
 }

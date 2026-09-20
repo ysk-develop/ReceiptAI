@@ -14,11 +14,12 @@
 <body>
   <header class="header">
     <h1>🧾 レシート自動仕分け</h1>
-    <p class="subtitle">写真・メモからAIが品目を抽出し、家計簿へ</p>
+    <p class="subtitle">写真・メモからAIが品目を抽出し、スプレッドシートへ</p>
   </header>
 
   <nav class="tabs" role="tablist">
     <button class="tab active" data-tab="analyze" role="tab" aria-selected="true">解析</button>
+    <button class="tab" data-tab="history" role="tab" aria-selected="false">履歴</button>
     <button class="tab" data-tab="settings" role="tab" aria-selected="false">設定</button>
   </nav>
 
@@ -86,9 +87,23 @@
             <span id="totalPrice" class="total-price">0 円</span>
           </div>
 
-          <button id="sendBtn" class="btn btn-success">☁ Googleドライブへ保存</button>
+          <button id="sendBtn" class="btn btn-success">☁ スプレッドシートへ保存</button>
         </div>
       </div>
+    </section>
+
+    <section id="tab-history" class="tab-panel" role="tabpanel">
+      <div class="card">
+        <h2>保存済みレシート</h2>
+        <p class="hint">スプレッドシートから直近のデータを取得します。画像はボタン押下時のみ表示します。</p>
+        <div class="form-row">
+          <label for="historyMonth">月で絞り込み（空欄=直近）</label>
+          <input type="month" id="historyMonth">
+        </div>
+        <button id="refreshHistoryBtn" class="btn btn-primary">履歴を読み込む</button>
+        <p id="historyStatus" class="status-text">「履歴を読み込む」をタップしてください</p>
+      </div>
+      <div id="historyList"></div>
     </section>
 
     <section id="tab-settings" class="tab-panel" role="tabpanel">
@@ -115,9 +130,9 @@
       </details>
 
       <details class="settings-section" id="gasSettings">
-        <summary>Googleドライブ連携（GAS）</summary>
+        <summary>スプレッドシート連携（GAS）</summary>
         <div class="settings-section-body">
-          <p class="hint">末尾が <code>/exec</code> のウェブアプリURLを設定します。GASの Code.gs を最新にして「新バージョン」で再デプロイし、アクセスは「全員」にしてください。フォルダID未設定なら My Drive に「ReceiptAI」フォルダが自動作成されます。</p>
+          <p class="hint">最新の <code>gas/Code.gs</code> を貼り、<code>setupReceiptAI</code> を実行後にウェブアプリを<strong>新バージョン</strong>でデプロイしてください。アクセスは「全員」。画像は長辺1280pxに縮小して送信します。</p>
           <div class="form-row">
             <label for="gasUrlInput">GAS Web App URL</label>
             <input type="url" id="gasUrlInput" placeholder="https://script.google.com/macros/s/.../exec">
@@ -142,12 +157,24 @@
       <details class="settings-section">
         <summary>このアプリについて</summary>
         <div class="settings-section-body">
-          <p class="about-text">レシート写真またはテキストメモを Gemini API で解析し、店舗名・日付・品目・金額・カテゴリを抽出します。画面上で誤読を修正してから、Google Apps Script 経由で Google ドライブへ JSON を送信できます。</p>
+          <p class="about-text">解析結果は Google スプレッドシートに保存され、画像は Drive の ReceiptAI/images に保管されます。履歴タブで同期表示できます。</p>
           <p class="about-text">APIキーと GAS URL は各端末の localStorage にのみ保存されます。</p>
         </div>
       </details>
     </section>
   </main>
+
+  <div id="imageModal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-backdrop" id="imageModalClose"></div>
+    <div class="modal-panel">
+      <div class="modal-header">
+        <span>レシート画像</span>
+        <button type="button" class="btn btn-secondary btn-sm" id="imageModalCloseBtn">閉じる</button>
+      </div>
+      <img id="modalImg" alt="レシート画像">
+      <p id="modalImgHint" class="hint"></p>
+    </div>
+  </div>
 
   <footer class="footer">
     <p>解析結果は参考です。金額・カテゴリは保存前に必ず確認してください。</p>

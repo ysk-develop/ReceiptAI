@@ -1,62 +1,38 @@
 # レシート自動仕分け家計簿
 
-レシート写真またはテキストメモを Gemini API で解析し、品目・金額・カテゴリを抽出して Google ドライブへ保存する PWA です。
+レシート写真またはテキストメモを Gemini API で解析し、**Google スプレッドシート**を正本として保存する PWA ＋ PyQt デスクトップアプリです。画像は長辺 1280px に縮小して Drive に保管し、必要なときだけ表示します。
 
-UI・構成は [EVCharge-Advisor](https://ysk-develop.github.io/EVCharge-Advisor/) と同じスタイルです。
+UI は [EVCharge-Advisor](https://ysk-develop.github.io/EVCharge-Advisor/) と同系統のティール系デザインです。
 
-## 機能
+## 構成
 
-- レシート写真を Gemini API で解析（複数枚が写っていても対応）
-- テキストメモ（例:「ドラッグストア、ティッシュ 235円」）からも同じ形式で抽出
-- 解析結果の一覧表示・インライン修正・明細行の追加
-- 手入力のみでの明細追加
-- 確定データを Google Apps Script（GAS）経由で Google ドライブへ JSON 保存
-- モデル一覧を API から取得（プルダウン選択）
-- APIキー・GAS URL は各端末の localStorage に保存
+```
+スマホ PWA ──解析・修正──┐
+                         ├── GAS ──► スプレッドシート（正本）
+PC PyQt  ──同期・集計───┘         └─ Drive/ReceiptAI/images（画像）
+```
 
-## GitHub Pages デプロイ手順
+## スマホ（GitHub Pages）
 
-1. このリポジトリを GitHub にプッシュ
-2. Settings → Pages → Source: `main` ブランチ、`/ (root)` を選択
-3. 数分後 `https://<username>.github.io/<repo>/` でアクセス
-4. iPhone: Safari で開く → 共有 → ホーム画面に追加
+https://ysk-develop.github.io/ReceiptAI/
 
-## 初回設定
+### GAS 初回セットアップ
 
-1. **設定**タブで Gemini API キーを入力（「この端末に保存」にチェック）
-2. **モデル一覧を取得**をタップし、モデルを選択
-3. Google Apps Script をデプロイし、**GAS Web App URL** を保存（`gas/Code.gs` 参照）
+1. [Apps Script](https://script.google.com/) で新規プロジェクト
+2. [`gas/Code.gs`](gas/Code.gs) を貼り付け
+3. エディタで **`setupReceiptAI`** を実行（シート・フォルダ自動作成）
+4. **デプロイ → ウェブアプリ**（実行:自分 / アクセス:**全員**）
+5. `/exec` URL をアプリ設定に保存
+6. コード変更後は必ず **新バージョン** で再デプロイ
 
-## 使い方
+### 使い方
 
-1. **解析**タブでレシート写真を選択、またはテキストメモを入力
-2. **AIで解析** → 内容を確認・修正
-3. **Googleドライブへ保存** で JSON を送信
+1. 設定で Gemini API キー・GAS URL を保存
+2. 写真選択（自動で 1280px JPEG 縮小）またはメモ → AI解析 → 修正
+3. **スプレッドシートへ保存**（画像があれば images フォルダへ）
+4. **履歴**タブで同期表示／**画像を表示**（リクエスト時のみ）
 
-## Google Apps Script の準備
-
-1. [Google Apps Script](https://script.google.com/) で新規プロジェクトを作成
-2. `gas/Code.gs` の内容を貼り付け（`FOLDER_ID` は空のままでOK → My Drive に「ReceiptAI」フォルダを自動作成）
-3. **デプロイ** → **新しいデプロイ** → 種類: ウェブアプリ
-4. 実行ユーザー: 自分 / アクセスできるユーザー: **全員**（「Googleアカウントを持つユーザー」ではない）
-5. 発行された URL（末尾 `/exec`）をアプリの設定に保存
-6. コード変更後は必ず **デプロイを管理 → 編集 → 新バージョン** で再デプロイ
-
-動作確認:
-- ブラウザで `https://script.google.com/macros/s/.../exec?ping=1` を開く
-- `{"status":"ok","folderName":"ReceiptAI",...}` と出ればOK
-- エディタで `testWrite` を実行するとテストファイルが1つ作られます
-
-## 注意
-
-- 解析結果は参考です。保存前に金額・カテゴリを確認してください
-- APIキーは localStorage に保存されます（端末・ブラウザごとに独立）
-- ローカルファイル（`file://`）では動作しません。GitHub Pages 等の Web サーバー経由で開いてください
-- 古い実装では CORS のため「成功したように見えても Drive に保存されない」ことがありました。最新の `Code.gs` へ更新＆再デプロイしてください
-
-## デスクトップアプリ（PC）
-
-スマホで Drive に溜めた JSON を取り込み、SQLite で蓄積・グラフ表示する Python アプリです。
+## デスクトップ（PyQt6）
 
 ```powershell
 cd desktop
@@ -64,20 +40,21 @@ python -m pip install -r requirements.txt
 python main.py
 ```
 
-PyQt6 製。詳細は [desktop/README.md](desktop/README.md) を参照。
+1. 設定にスマホと同じ GAS URL を保存 → 接続テスト
+2. **シートから同期**でローカル SQLite キャッシュを更新
+3. グラフ・CSV・必要時の画像表示（ブラウザで開く）
+
+## 注意
+
+- 画像は表示用に「リンクを知っている全員が閲覧可」で保存されます（ID 推測は困難ですが、共有には注意）
+- APIキーは端末ローカルのみに保存
+- スプレッドシートが正本、PC の SQLite は高速表示用キャッシュです
 
 ## ファイル構成
 
 ```
-├── index.html              # スマホ PWA
-├── manifest.json
-├── service-worker.js
-├── css/styles.css
-├── js/
-├── gas/Code.gs
-├── desktop/                # PC アプリ
-│   ├── main.py
-│   ├── requirements.txt
-│   └── receiptai/
+├── index.html / css / js/   # スマホ PWA
+├── gas/Code.gs              # シート＋画像 API
+├── desktop/                 # PyQt6 アプリ
 └── icons/
 ```

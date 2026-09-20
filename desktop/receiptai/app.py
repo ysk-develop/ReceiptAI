@@ -6,7 +6,8 @@ import sys
 from datetime import date
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, QUrl, pyqtSignal
+from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -30,8 +31,9 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from . import charts, db, gemini, importer
+from . import charts, db, gas_client, gemini, importer, sheets_sync
 from .config import CATEGORIES, DB_PATH, load_config, save_config
+from .image_util import resize_to_jpeg_base64
 from .styles import APP_STYLESHEET
 
 
@@ -109,7 +111,7 @@ class MainWindow(QMainWindow):
         title = QLabel("🧾 レシート自動仕分け家計簿")
         title.setObjectName("HeaderTitle")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        sub = QLabel("GoogleドライブのJSONを取り込み、集計・グラフ表示")
+        sub = QLabel("スプレッドシート同期・集計・グラフ表示")
         sub.setObjectName("HeaderSub")
         sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
         v.addWidget(title)
@@ -132,7 +134,11 @@ class MainWindow(QMainWindow):
         self.month_combo.currentTextChanged.connect(lambda _t: self.refresh_list())
         top.addWidget(self.month_combo)
 
-        btn_import = _btn("Driveから取込")
+        btn_sync = _btn("シートから同期")
+        btn_sync.clicked.connect(self.do_sync_sheet)
+        top.addWidget(btn_sync)
+
+        btn_import = _btn("JSON取込", "SecondaryButton")
         btn_import.clicked.connect(self.do_import)
         top.addWidget(btn_import)
 
@@ -154,8 +160,8 @@ class MainWindow(QMainWindow):
         table_card = _card()
         tv = QVBoxLayout(table_card)
         tv.setContentsMargins(8, 8, 8, 8)
-        self.list_table = QTableWidget(0, 4)
-        self.list_table.setHorizontalHeaderLabels(["日付", "店舗", "合計", ""])
+        self.list_table = QTableWidget(0, 5)
+        self.list_table.setHorizontalHeaderLabels(["日付", "店舗", "合計", "編集", "画像"])
         self.list_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.list_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.list_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -208,6 +214,17 @@ class MainWindow(QMainWindow):
             rid = int(r["id"])
             btn.clicked.connect(lambda _=False, i=rid: self.open_receipt(i))
             self.list_table.setCellWidget(row, 3, btn)
+
+            img_btn = _btn("画像", "AccentButton")
+            img_btn.setFixedWidth(72)
+            view_url = str(r.get("image_view_url") or "")
+            file_id = str(r.get("image_file_id") or "")
+            has_img = bool(view_url or file_id)
+            img_btn.setEnabled(has_img)
+            img_btn.clicked.connect(
+                lambda _=False, u=view_url, f=file_id: self.show_receipt_image(u, f)
+            )
+            self.list_table.setCellWidget(row, 4, img_btn)
 
     # ── edit ───────────────────────────────────────────────
     def _build_edit_tab(self) -> None:
@@ -448,8 +465,9 @@ class MainWindow(QMainWindow):
         card = _card()
         v = QVBoxLayout(card)
         v.setContentsMargins(12, 12, 12, 12)
-        hint = QLabel("PC上の画像またはメモをGeminiで解析し、編集タブへ送ります")
+        hint = QLabel("PC上の画像またはメモをGeminiで解析し、編集タブへ送ります。保存時にスプレッドシート＋画像(1280px)へ送れます。")
         hint.setObjectName("Muted")
+        hint.setWordWrap(True)
         v.addWidget(hint)
 
         row = QHBoxLayout()
@@ -472,6 +490,10 @@ class MainWindow(QMainWindow):
         run_btn = _btn("AIで解析して編集へ")
         run_btn.clicked.connect(self.do_analyze)
         v.addWidget(run_btn, alignment=Qt.AlignmentFlag.AlignLeft)
+
+        save_cloud = _btn("解析結果をシートへ保存（画像付き）", "AccentButton")
+        save_cloud.clicked.connect(self.save_current_to_sheet)
+        v.addWidget(save_cloud, alignment=Qt.AlignmentFlag.AlignLeft)
         v.addStretch(1)
         layout.addWidget(card)
         self.tabs.addTab(page, "AI解析")
@@ -539,10 +561,26 @@ class MainWindow(QMainWindow):
         v = QVBoxLayout(card)
         v.setContentsMargins(12, 12, 12, 12)
 
-        t1 = QLabel("Googleドライブ同期フォルダ")
+        t0 = QLabel("スプレッドシート連携（GAS）")
+        t0.setObjectName("SectionTitle")
+        v.addWidget(t0)
+        hint0 = QLabel("スマホと同じ GAS /exec URL。正本はスプレッドシート、PCはローカルSQLiteにキャッシュします。")
+        hint0.setObjectName("Muted")
+        hint0.setWordWrap(True)
+        v.addWidget(hint0)
+        grow = QHBoxLayout()
+        self.gas_edit = QLineEdit(self.cfg.get("gas_url") or "")
+        self.gas_edit.setPlaceholderText("https://script.google.com/macros/s/.../exec")
+        grow.addWidget(self.gas_edit, 1)
+        test_gas = _btn("接続テスト", "SecondaryButton")
+        test_gas.clicked.connect(self.test_gas)
+        grow.addWidget(test_gas)
+        v.addLayout(grow)
+
+        t1 = QLabel("（任意）旧JSON同期フォルダ")
         t1.setObjectName("SectionTitle")
         v.addWidget(t1)
-        hint = QLabel("スマホアプリが保存する ReceiptAI フォルダ（Google Drive for Desktop のローカルパス）")
+        hint = QLabel("以前の JSON 取込用。新規運用ではシート同期を使ってください。")
         hint.setObjectName("Muted")
         hint.setWordWrap(True)
         v.addWidget(hint)
@@ -595,12 +633,108 @@ class MainWindow(QMainWindow):
             self.sync_edit.setText(path)
 
     def save_settings(self) -> None:
+        self.cfg["gas_url"] = self.gas_edit.text().strip()
         self.cfg["sync_folder"] = self.sync_edit.text().strip()
         self.cfg["gemini_api_key"] = self.api_edit.text().strip()
         self.cfg["gemini_model"] = self.model_combo.currentText().strip()
         self.cfg["archive_imported"] = self.archive_check.isChecked()
         save_config(self.cfg)
         QMessageBox.information(self, "設定", "保存しました")
+
+    def test_gas(self) -> None:
+        url = self.gas_edit.text().strip() or self.cfg.get("gas_url") or ""
+        if not url:
+            QMessageBox.warning(self, "GAS", "URLを入力してください")
+            return
+        try:
+            data = gas_client.ping(url)
+            self.cfg["gas_url"] = url
+            save_config(self.cfg)
+            QMessageBox.information(
+                self,
+                "接続OK",
+                f"シート: {data.get('spreadsheetUrl') or data.get('sheetName')}\n画像: {data.get('imagesFolderUrl') or ''}",
+            )
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, "接続失敗", str(exc))
+
+    def show_receipt_image(self, view_url: str, file_id: str) -> None:
+        url = view_url or (f"https://drive.google.com/uc?export=view&id={file_id}" if file_id else "")
+        if not url:
+            QMessageBox.information(self, "画像", "画像がありません")
+            return
+        QDesktopServices.openUrl(QUrl(url))
+
+    def do_sync_sheet(self) -> None:
+        url = self.cfg.get("gas_url") or self.gas_edit.text().strip()
+        if not url:
+            QMessageBox.warning(self, "同期", "設定でGAS URLを保存してください")
+            self.tabs.setCurrentIndex(4)
+            return
+        ym = self.month_combo.currentText()
+        month = "" if ym == "すべて" else ym
+        self.status.showMessage("シートから同期中…")
+
+        def work() -> dict:
+            return sheets_sync.sync_from_sheet(url, month=month, limit=100)
+
+        worker = Worker(work)
+        worker.finished_ok.connect(self._sync_done)
+        worker.finished_err.connect(lambda m: QMessageBox.critical(self, "同期エラー", m))
+        self._workers.append(worker)
+        worker.start()
+
+    def _sync_done(self, result: object) -> None:
+        data = result if isinstance(result, dict) else {}
+        msg = (
+            f"取得 {data.get('fetched', 0)} 件\n"
+            f"新規 {data.get('created', 0)} / 更新 {data.get('updated', 0)}"
+        )
+        errs = data.get("errors") or []
+        if errs:
+            msg += "\n\nエラー:\n" + "\n".join(errs[:8])
+        QMessageBox.information(self, "同期結果", msg)
+        self.status.showMessage(f"DB: {DB_PATH}")
+        self.refresh_all()
+
+    def save_current_to_sheet(self) -> None:
+        url = self.cfg.get("gas_url") or self.gas_edit.text().strip()
+        if not url:
+            QMessageBox.warning(self, "保存", "設定でGAS URLを保存してください")
+            self.tabs.setCurrentIndex(4)
+            return
+        items = self._collect_items()
+        if not items:
+            QMessageBox.warning(self, "保存", "先に解析するか明細を入力してください")
+            return
+        payload = {
+            "shop_name": self.shop_edit.text().strip() or "不明",
+            "date": self.date_edit.text().strip() or date.today().isoformat(),
+            "total_amount": sum(i["price"] for i in items),
+            "items": items,
+            "timestamp": date.today().isoformat(),
+        }
+        image_path = self.image_edit.text().strip() if hasattr(self, "image_edit") else ""
+        try:
+            if image_path:
+                b64, mime = resize_to_jpeg_base64(Path(image_path), 1280)
+                payload["image_base64"] = b64
+                payload["image_mime"] = mime
+            result = gas_client.save_receipt(url, payload)
+            cloud_id = str(result.get("receipt_id") or "")
+            if cloud_id:
+                db.upsert_cloud_receipt(
+                    cloud_id,
+                    payload["shop_name"],
+                    payload["date"],
+                    items,
+                    image_file_id=str(result.get("image_file_id") or ""),
+                    image_view_url=str(result.get("image_view_url") or ""),
+                )
+            QMessageBox.information(self, "保存", "スプレッドシートへ保存しました")
+            self.refresh_all()
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, "保存エラー", str(exc))
 
     def fetch_models(self) -> None:
         key = self.api_edit.text().strip() or self.cfg.get("gemini_api_key") or ""

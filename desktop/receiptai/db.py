@@ -44,6 +44,9 @@ def init_db(db_path: Path | None = None) -> None:
                 total_amount REAL NOT NULL DEFAULT 0,
                 source_file TEXT,
                 source_hash TEXT UNIQUE,
+                cloud_receipt_id TEXT UNIQUE,
+                image_file_id TEXT DEFAULT '',
+                image_view_url TEXT DEFAULT '',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 note TEXT DEFAULT ''
@@ -63,6 +66,24 @@ def init_db(db_path: Path | None = None) -> None:
             CREATE INDEX IF NOT EXISTS idx_items_category ON items(category);
             """
         )
+        _migrate_columns(conn)
+
+
+def _migrate_columns(conn: sqlite3.Connection) -> None:
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(receipts)").fetchall()}
+    alter = []
+    if "cloud_receipt_id" not in cols:
+        alter.append("ALTER TABLE receipts ADD COLUMN cloud_receipt_id TEXT")
+    if "image_file_id" not in cols:
+        alter.append("ALTER TABLE receipts ADD COLUMN image_file_id TEXT DEFAULT ''")
+    if "image_view_url" not in cols:
+        alter.append("ALTER TABLE receipts ADD COLUMN image_view_url TEXT DEFAULT ''")
+    for sql in alter:
+        conn.execute(sql)
+    # unique index for cloud id (ignore nulls / empties via partial not available on older sqlite — use unique where possible)
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_receipts_cloud_id ON receipts(cloud_receipt_id)"
+    )
 
 
 def _now() -> str:
@@ -76,10 +97,13 @@ def insert_receipt(
     *,
     source_file: str | None = None,
     source_hash: str | None = None,
+    cloud_receipt_id: str | None = None,
+    image_file_id: str = "",
+    image_view_url: str = "",
     note: str = "",
     db_path: Path | None = None,
 ) -> tuple[int, bool]:
-    """Insert receipt. Returns (id, created). created=False if source_hash already existed."""
+    """Insert receipt. Returns (id, created). Skip if source_hash or cloud_receipt_id exists."""
     total = sum(float(i.get("price") or 0) for i in items)
     ts = _now()
     with get_conn(db_path) as conn:
@@ -89,13 +113,100 @@ def insert_receipt(
             ).fetchone()
             if existing:
                 return int(existing["id"]), False
+        if cloud_receipt_id:
+            existing = conn.execute(
+                "SELECT id FROM receipts WHERE cloud_receipt_id = ?", (cloud_receipt_id,)
+            ).fetchone()
+            if existing:
+                return int(existing["id"]), False
 
         cur = conn.execute(
             """
-            INSERT INTO receipts (shop_name, date, total_amount, source_file, source_hash, created_at, updated_at, note)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO receipts (
+                shop_name, date, total_amount, source_file, source_hash,
+                cloud_receipt_id, image_file_id, image_view_url,
+                created_at, updated_at, note
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (shop_name or "不明", date, total, source_file, source_hash, ts, ts, note),
+            (
+                shop_name or "不明",
+                date,
+                total,
+                source_file,
+                source_hash,
+                cloud_receipt_id,
+                image_file_id or "",
+                image_view_url or "",
+                ts,
+                ts,
+                note,
+            ),
+        )
+        rid = int(cur.lastrowid)
+        for item in items:
+            conn.execute(
+                "INSERT INTO items (receipt_id, name, price, category) VALUES (?, ?, ?, ?)",
+                (
+                    rid,
+                    str(item.get("name") or "（未入力）"),
+                    float(item.get("price") or 0),
+                    str(item.get("category") or "その他"),
+                ),
+            )
+        return rid, True
+
+
+def upsert_cloud_receipt(
+    cloud_receipt_id: str,
+    shop_name: str,
+    date: str,
+    items: list[dict[str, Any]],
+    *,
+    image_file_id: str = "",
+    image_view_url: str = "",
+    db_path: Path | None = None,
+) -> tuple[int, bool]:
+    """Insert or refresh a receipt keyed by cloud_receipt_id. Returns (id, created)."""
+    total = sum(float(i.get("price") or 0) for i in items)
+    ts = _now()
+    with get_conn(db_path) as conn:
+        existing = conn.execute(
+            "SELECT id FROM receipts WHERE cloud_receipt_id = ?", (cloud_receipt_id,)
+        ).fetchone()
+        if existing:
+            rid = int(existing["id"])
+            conn.execute(
+                """
+                UPDATE receipts
+                SET shop_name = ?, date = ?, total_amount = ?,
+                    image_file_id = ?, image_view_url = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (shop_name, date, total, image_file_id or "", image_view_url or "", ts, rid),
+            )
+            conn.execute("DELETE FROM items WHERE receipt_id = ?", (rid,))
+            for item in items:
+                conn.execute(
+                    "INSERT INTO items (receipt_id, name, price, category) VALUES (?, ?, ?, ?)",
+                    (
+                        rid,
+                        str(item.get("name") or "（未入力）"),
+                        float(item.get("price") or 0),
+                        str(item.get("category") or "その他"),
+                    ),
+                )
+            return rid, False
+
+        cur = conn.execute(
+            """
+            INSERT INTO receipts (
+                shop_name, date, total_amount, cloud_receipt_id,
+                image_file_id, image_view_url, created_at, updated_at, note
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, '')
+            """,
+            (shop_name, date, total, cloud_receipt_id, image_file_id or "", image_view_url or "", ts, ts),
         )
         rid = int(cur.lastrowid)
         for item in items:

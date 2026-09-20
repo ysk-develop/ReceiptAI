@@ -3,10 +3,16 @@ import {
   getModels, setModels, getGasUrl, setGasUrl
 } from './storage.js';
 import { CATEGORIES, normalizeCategory } from './categories.js';
-import { fetchModels, analyzeReceipt, sendToGas, pingGas } from './gemini-api.js';
+import {
+  fetchModels, analyzeReceipt, sendToGas, pingGas,
+  listReceipts, getReceipt
+} from './gemini-api.js';
+import { resizeImageFile } from './image-util.js';
 
 let imageData = null;
 let imageMime = 'image/jpeg';
+/** Resized JPEG for Drive upload (may equal imageData) */
+let uploadImageBase64 = null;
 
 function $(id) {
   return document.getElementById(id);
@@ -48,6 +54,9 @@ function initTabs() {
       tab.classList.add('active');
       tab.setAttribute('aria-selected', 'true');
       $(`tab-${tab.dataset.tab}`).classList.add('active');
+      if (tab.dataset.tab === 'history') {
+        // optional auto-load when gas configured
+      }
     });
   });
 }
@@ -57,7 +66,6 @@ function populateModelSelect() {
   const models = getModels();
   const current = getModel();
   select.innerHTML = '';
-
   if (models.length === 0) {
     const opt = document.createElement('option');
     opt.value = current;
@@ -65,7 +73,6 @@ function populateModelSelect() {
     select.appendChild(opt);
     return;
   }
-
   for (const m of models) {
     const opt = document.createElement('option');
     opt.value = m.id;
@@ -88,47 +95,34 @@ function renderCategoryList() {
 function initSettings() {
   const apiKey = getApiKey();
   if (apiKey) $('apiKeyInput').value = apiKey;
-
   const gasUrl = getGasUrl();
   if (gasUrl) $('gasUrlInput').value = gasUrl;
-
   if (!apiKey) $('apiSettings').open = true;
   if (!gasUrl) $('gasSettings').open = true;
-
   populateModelSelect();
   $('modelSelect').addEventListener('change', (e) => setModel(e.target.value));
   renderCategoryList();
-}
-
-function readFileAsBase64(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result;
-      resolve(result.split(',')[1]);
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
 }
 
 function initImageInput() {
   $('imageInput').addEventListener('change', async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
     clearMessage();
-    imageMime = file.type || 'image/jpeg';
-
+    $('imageStatus').textContent = '画像をリサイズ中…';
     try {
-      imageData = await readFileAsBase64(file);
-      $('previewImg').src = URL.createObjectURL(file);
+      const resized = await resizeImageFile(file, 1280, 0.82);
+      imageData = resized.base64;
+      imageMime = resized.mime;
+      uploadImageBase64 = resized.base64;
+      $('previewImg').src = resized.dataUrl;
       show($('imagePreview'));
-      const mb = (file.size / 1024 / 1024).toFixed(2);
-      $('imageStatus').textContent = `画像を読み込みました（${file.name} / ${mb} MB）`;
+      $('imageStatus').textContent =
+        `画像を読み込みました（${resized.width}×${resized.height}, JPEG縮小済み）`;
     } catch (err) {
       showMessage(`画像の読み込みに失敗: ${err.message}`);
       imageData = null;
+      uploadImageBase64 = null;
     }
   });
 }
@@ -170,11 +164,8 @@ function addItemRow(name = '', price = '', category = '食費') {
 function renderItems(items = []) {
   const container = $('itemList');
   container.innerHTML = '';
-  if (!items.length) {
-    addItemRow();
-  } else {
-    items.forEach((item) => addItemRow(item.name, item.price, item.category));
-  }
+  if (!items.length) addItemRow();
+  else items.forEach((item) => addItemRow(item.name, item.price, item.category));
 }
 
 function collectItems() {
@@ -196,21 +187,19 @@ function openEditor(parsed) {
     ? parsed.date
     : todayStr();
   const items = parsed?.items || [];
-
   $('shopName').value = shop;
   $('receiptDate').value = date;
   renderItems(items);
-
-  const count = items.length;
   $('detectedSummary').innerHTML = parsed
-    ? `<b>検出結果:</b> ${escapeHtml(shop || '不明')} / ${escapeHtml(date)}（${count}件）`
+    ? `<b>検出結果:</b> ${escapeHtml(shop || '不明')} / ${escapeHtml(date)}（${items.length}件）`
     : '手入力モードです。明細を追加して保存できます。';
-
   show($('resultArea'));
 }
 
 function handleClear() {
   imageData = null;
+  uploadImageBase64 = null;
+  imageMime = 'image/jpeg';
   $('imageInput').value = '';
   $('textMemo').value = '';
   hide($('imagePreview'));
@@ -234,27 +223,33 @@ function ensureApiKey() {
   return apiKey;
 }
 
+function requireGasUrl() {
+  const gasUrl = $('gasUrlInput').value.trim() || getGasUrl();
+  if (!gasUrl) {
+    showMessage('設定タブでGAS Web App URLを保存してください');
+    $('gasSettings').open = true;
+    return null;
+  }
+  return gasUrl;
+}
+
 async function handleAnalyze() {
   clearMessage();
-
   const memo = $('textMemo').value.trim();
   if (!imageData && !memo) {
     showMessage('先にレシート写真を選択するか、テキストメモを入力してください');
     return;
   }
-
   const apiKey = ensureApiKey();
   if (!apiKey) return;
-
   const model = $('modelSelect').value || getModel();
   if (!model) {
-    showMessage('モデルを選択してください（設定タブでモデル一覧を取得）');
+    showMessage('モデルを選択してください');
     return;
   }
 
   show($('loadingArea'));
   $('analyzeBtn').disabled = true;
-
   try {
     const parsed = await analyzeReceipt(apiKey, model, {
       base64Data: imageData,
@@ -279,12 +274,8 @@ function handleManualEdit() {
 
 async function handleSend() {
   clearMessage();
-  const gasUrl = $('gasUrlInput').value.trim() || getGasUrl();
-  if (!gasUrl) {
-    showMessage('設定タブでGAS Web App URLを保存してください');
-    $('gasSettings').open = true;
-    return;
-  }
+  const gasUrl = requireGasUrl();
+  if (!gasUrl) return;
 
   const items = collectItems();
   if (items.length === 0) {
@@ -300,22 +291,23 @@ async function handleSend() {
     total_amount: totalAmount,
     items
   };
+  if (uploadImageBase64) {
+    payload.image_base64 = uploadImageBase64;
+    payload.image_mime = 'image/jpeg';
+  }
 
   $('sendBtn').disabled = true;
   $('sendBtn').textContent = '送信中...';
-
   try {
     const result = await sendToGas(gasUrl, payload);
     setGasUrl(gasUrl);
-
     if (result.verified) {
-      const folder = result.result?.folderName || 'ReceiptAI';
-      const file = result.result?.fileName || '';
-      showMessage(`保存成功: ${folder} / ${file}`, 'success');
+      const img = result.result?.image_file_id ? ' / 画像あり' : '';
+      showMessage(`保存成功（スプレッドシート）${img}`, 'success');
       handleClear();
     } else {
       showMessage(
-        `送信しましたが、結果を確認できませんでした。\nGoogleドライブの「ReceiptAI」フォルダを見てください。\n無い場合は GAS の Code.gs を更新して新バージョン再デプロイ＆アクセス「全員」にしてください。`,
+        `送信しました（結果未確認）。履歴タブやスプレッドシートを確認してください。\n${result.hint || ''}`,
         'error'
       );
     }
@@ -323,64 +315,93 @@ async function handleSend() {
     showMessage(`送信エラー: ${err.message}`);
   } finally {
     $('sendBtn').disabled = false;
-    $('sendBtn').textContent = '☁ Googleドライブへ保存';
+    $('sendBtn').textContent = '☁ スプレッドシートへ保存';
   }
 }
 
-async function handleTestGas() {
-  clearMessage();
-  const gasUrl = $('gasUrlInput').value.trim() || getGasUrl();
-  const out = $('gasTestResult');
-  if (!gasUrl) {
-    showMessage('先にGAS URLを入力してください');
+async function handleRefreshHistory() {
+  const gasUrl = requireGasUrl();
+  if (!gasUrl) return;
+  const month = $('historyMonth').value || '';
+  $('historyStatus').textContent = '読み込み中…';
+  $('historyList').innerHTML = '';
+  try {
+    const receipts = await listReceipts(gasUrl, { month, limit: 50 });
+    if (!receipts.length) {
+      $('historyStatus').textContent = 'データがありません';
+      return;
+    }
+    $('historyStatus').textContent = `${receipts.length} 件`;
+    const frag = document.createDocumentFragment();
+    for (const r of receipts) {
+      const card = document.createElement('div');
+      card.className = 'history-card';
+      card.innerHTML = `
+        <h3>${escapeHtml(r.shop_name || '不明')}</h3>
+        <div class="history-meta">${escapeHtml(r.date)} / ${Number(r.total_amount || 0).toLocaleString()} 円 / ${r.item_count || 0}品目</div>
+        <div class="btn-row">
+          <button type="button" class="btn btn-secondary btn-detail">明細</button>
+          <button type="button" class="btn btn-primary btn-image" ${r.image_file_id || r.image_view_url ? '' : 'disabled'}>画像を表示</button>
+        </div>
+        <div class="history-detail hidden"></div>
+      `;
+      card.querySelector('.btn-detail').addEventListener('click', async () => {
+        const box = card.querySelector('.history-detail');
+        if (!box.classList.contains('hidden') && box.innerHTML) {
+          box.classList.add('hidden');
+          return;
+        }
+        box.textContent = '取得中…';
+        box.classList.remove('hidden');
+        try {
+          const full = await getReceipt(gasUrl, r.receipt_id);
+          box.innerHTML = `<ul>${(full.items || []).map((it) =>
+            `<li>${escapeHtml(it.name)} — ${Number(it.price).toLocaleString()} 円（${escapeHtml(it.category)}）</li>`
+          ).join('')}</ul>`;
+        } catch (err) {
+          box.textContent = err.message;
+        }
+      });
+      card.querySelector('.btn-image').addEventListener('click', () => {
+        openImageModal(r.image_view_url, r.image_file_id);
+      });
+      frag.appendChild(card);
+    }
+    $('historyList').appendChild(frag);
+  } catch (err) {
+    $('historyStatus').textContent = `エラー: ${err.message}`;
+  }
+}
+
+function openImageModal(viewUrl, fileId) {
+  const url = viewUrl || (fileId ? `https://drive.google.com/uc?export=view&id=${fileId}` : '');
+  if (!url) {
+    alert('画像がありません');
     return;
   }
-
-  $('testGasBtn').disabled = true;
-  $('testGasBtn').textContent = 'テスト中...';
-  out.textContent = '接続確認中…';
-
-  try {
-    const result = await pingGas(gasUrl);
-    out.textContent = result.message;
-    if (result.ok) {
-      setGasUrl(normalizeUrlKeep(gasUrl));
-      showMessage(result.message, 'success');
-    } else if (result.corsBlocked && result.checkUrl) {
-      showMessage('CORSのため自動判定できません。確認用URLを開きます', 'error');
-      window.open(result.checkUrl, '_blank', 'noopener');
-    } else {
-      showMessage(result.message, 'error');
-    }
-  } catch (err) {
-    out.textContent = err.message;
-    showMessage(err.message);
-  } finally {
-    $('testGasBtn').disabled = false;
-    $('testGasBtn').textContent = '接続テスト';
-  }
+  $('modalImg').src = url;
+  $('modalImgHint').textContent = '表示されない場合は Drive の共有設定、または GAS 再デプロイを確認してください。';
+  show($('imageModal'));
 }
 
-function normalizeUrlKeep(url) {
-  return String(url || '').trim().replace(/\/$/, '');
+function closeImageModal() {
+  hide($('imageModal'));
+  $('modalImg').src = '';
 }
 
 async function handleFetchModels() {
   clearMessage();
   const apiKey = ensureApiKey();
   if (!apiKey) return;
-
   $('fetchModelsBtn').disabled = true;
   $('fetchModelsBtn').textContent = '取得中...';
-
   try {
     const models = await fetchModels(apiKey);
     setModels(models);
     populateModelSelect();
     if (models.length > 0) {
       const current = getModel();
-      const stillValid = models.some((m) => m.id === current);
-      if (!stillValid) {
+      if (!models.some((m) => m.id === current)) {
         const flash = models.find((m) => /flash/i.test(m.id)) || models[0];
         setModel(flash.id);
         $('modelSelect').value = flash.id;
@@ -395,28 +416,46 @@ async function handleFetchModels() {
   }
 }
 
-function initApiKeyActions() {
-  $('deleteApiKeyBtn').addEventListener('click', () => {
-    if (!confirm('APIキーをこの端末から削除しますか？')) return;
-    setApiKey('');
-    $('apiKeyInput').value = '';
-    showMessage('APIキーを削除しました', 'success');
-  });
+async function handleTestGas() {
+  clearMessage();
+  const gasUrl = $('gasUrlInput').value.trim() || getGasUrl();
+  const out = $('gasTestResult');
+  if (!gasUrl) {
+    showMessage('先にGAS URLを入力してください');
+    return;
+  }
+  $('testGasBtn').disabled = true;
+  $('testGasBtn').textContent = 'テスト中...';
+  out.textContent = '接続確認中…';
+  try {
+    const result = await pingGas(gasUrl);
+    out.textContent = result.message + (result.data?.spreadsheetUrl ? `\n${result.data.spreadsheetUrl}` : '');
+    if (result.ok) {
+      setGasUrl(gasUrl.replace(/\/$/, ''));
+      showMessage(result.message, 'success');
+    } else if (result.checkUrl) {
+      window.open(result.checkUrl, '_blank', 'noopener');
+      showMessage(result.message, 'error');
+    } else {
+      showMessage(result.message, 'error');
+    }
+  } catch (err) {
+    out.textContent = err.message;
+    showMessage(err.message);
+  } finally {
+    $('testGasBtn').disabled = false;
+    $('testGasBtn').textContent = '接続テスト';
+  }
 }
 
 function initGasActions() {
   $('saveGasBtn').addEventListener('click', () => {
     const url = $('gasUrlInput').value.trim();
-    if (!url) {
-      showMessage('GAS URLを入力してください');
-      return;
-    }
+    if (!url) return showMessage('GAS URLを入力してください');
     setGasUrl(url);
     showMessage('GAS URLを保存しました', 'success');
   });
-
   $('testGasBtn').addEventListener('click', handleTestGas);
-
   $('deleteGasBtn').addEventListener('click', () => {
     if (!confirm('GAS URLをこの端末から削除しますか？')) return;
     setGasUrl('');
@@ -437,7 +476,6 @@ function init() {
   initTabs();
   initSettings();
   initImageInput();
-  initApiKeyActions();
   initGasActions();
   registerServiceWorker();
 
@@ -447,6 +485,15 @@ function init() {
   $('sendBtn').addEventListener('click', handleSend);
   $('manualSaveBtn').addEventListener('click', handleManualEdit);
   $('fetchModelsBtn').addEventListener('click', handleFetchModels);
+  $('refreshHistoryBtn').addEventListener('click', handleRefreshHistory);
+  $('deleteApiKeyBtn').addEventListener('click', () => {
+    if (!confirm('APIキーをこの端末から削除しますか？')) return;
+    setApiKey('');
+    $('apiKeyInput').value = '';
+    showMessage('APIキーを削除しました', 'success');
+  });
+  $('imageModalClose').addEventListener('click', closeImageModal);
+  $('imageModalCloseBtn').addEventListener('click', closeImageModal);
 }
 
 document.addEventListener('DOMContentLoaded', init);

@@ -1,13 +1,6 @@
-# ReceiptAI デスクトップアプリ（PyQt6）
+# ReceiptAI デスクトップ（PyQt6）
 
-スマホ（PWA）で Google ドライブに保存したレシート JSON を取り込み、SQLite に蓄積して一覧・編集・グラフ・CSV 出力する Windows 向けアプリです。
-
-UI は PyQt6 で実装し、プロジェクトの `.cursorrules`（QComboBox / QSpinBox 矢印、ボタン hover、QTableWidget セル編集）に準拠しています。配色はスマホ PWA と同じティール系です。
-
-## 必要環境
-
-- Python 3.10+
-- Google Drive for Desktop（スマホ保存先フォルダが PC に同期されていること）
+スプレッドシート（GAS）を正本とし、ローカル SQLite にキャッシュして一覧・編集・グラフ・CSV を行います。
 
 ## セットアップ
 
@@ -19,16 +12,14 @@ python main.py
 
 ## 使い方
 
-1. **設定**タブで、Drive 上の `ReceiptAI` フォルダのローカルパスを指定  
-   例: `G:\マイドライブ\ReceiptAI`
-2. **一覧** → **Driveから取込** で JSON を SQLite へ取り込み  
-3. **グラフ**でカテゴリ別パイチャート・月別棒グラフを表示
-4. 必要なら **AI解析**タブで PC 上の画像／メモを Gemini 解析 → 編集 → 保存
-5. **CSV出力**で Excel 用に書き出し
+1. **設定**にスマホと同じ GAS `/exec` URL を保存 → 接続テスト
+2. **一覧 → シートから同期**
+3. **画像**ボタンで Drive 上の原画像を表示（都度オープン）
+4. （任意）AI解析タブで PC 画像を解析し、シートへ画像付き保存
 
-## データ保存場所
+## テスト
 
-| 内容 | 場所 |
-|------|------|
-| SQLite DB | `%USERPROFILE%\.receiptai\receipts.db` |
-| 設定 | `%USERPROFILE%\.receiptai\config.json` |
+```powershell
+$env:QT_QPA_PLATFORM = "offscreen"
+python test_app.py -v
+```

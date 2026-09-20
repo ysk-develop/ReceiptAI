@@ -52,14 +52,35 @@ class DesktopAppTests(unittest.TestCase):
         self.assertFalse(created2)
         self.assertEqual(rid, rid2)
 
+        cloud_id = f"cloud_{os.getpid()}"
+        rid3, created3 = db.upsert_cloud_receipt(
+            cloud_id,
+            "クラウド店",
+            "2026-09-20",
+            [{"name": "お茶", "price": 100, "category": "食費"}],
+            image_file_id="img123",
+            image_view_url="https://example.com/x",
+        )
+        self.assertTrue(created3)
+        rid4, created4 = db.upsert_cloud_receipt(
+            cloud_id,
+            "クラウド店",
+            "2026-09-20",
+            [{"name": "お茶", "price": 120, "category": "食費"}],
+            image_file_id="img123",
+            image_view_url="https://example.com/x",
+        )
+        self.assertFalse(created4)
+        self.assertEqual(rid3, rid4)
+
         with tempfile.TemporaryDirectory() as td:
             folder = Path(td)
             payload = {
-                "shop_name": "ABC",
+                "shop_name": f"ABC-{os.getpid()}",
                 "date": "2026-09-18",
                 "total_amount": 335,
                 "items": [
-                    {"name": "お茶", "price": 100, "category": "食費"},
+                    {"name": f"お茶-{os.getpid()}", "price": 100, "category": "食費"},
                     {"name": "ティッシュ", "price": 235, "category": "日用品"},
                 ],
             }
@@ -68,7 +89,6 @@ class DesktopAppTests(unittest.TestCase):
             (folder / "receipt_x.json").write_text(
                 json.dumps(payload, ensure_ascii=False), encoding="utf-8"
             )
-            # import into real db but unique content
             result = importer.import_folder(folder, archive=True)
             self.assertEqual(result["imported"], 1)
             self.assertFalse((folder / "receipt_x.json").exists())

@@ -98,6 +98,28 @@ def delete_receipt(
     return data
 
 
+def find_duplicates(
+    gas_url: str,
+    *,
+    shop_name: str,
+    date: str,
+    total_amount: float | int,
+    item_count: int | None = None,
+) -> list[dict[str, Any]]:
+    params: dict[str, Any] = {
+        "action": "duplicates",
+        "shop": shop_name,
+        "date": date,
+        "total": str(int(round(float(total_amount or 0)))),
+    }
+    if item_count is not None:
+        params["items"] = str(int(item_count))
+    data = _get(gas_url, params, timeout=60)
+    if data.get("status") != "ok":
+        raise RuntimeError(data.get("message") or "duplicates failed")
+    return list(data.get("duplicates") or [])
+
+
 def save_receipt(gas_url: str, payload: dict[str, Any]) -> dict[str, Any]:
     body = {"action": "save", **payload}
     data = _post(gas_url, body)

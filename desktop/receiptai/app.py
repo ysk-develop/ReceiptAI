@@ -981,6 +981,57 @@ class MainWindow(QMainWindow):
             "items": items,
             "timestamp": date.today().isoformat(),
         }
+
+        # 重複確認（シート → ローカル）
+        dup_lines: list[str] = []
+        try:
+            sheet_dupes = gas_client.find_duplicates(
+                url,
+                shop_name=payload["shop_name"],
+                date=payload["date"],
+                total_amount=payload["total_amount"],
+                item_count=len(items),
+            )
+            for d in sheet_dupes[:3]:
+                dup_lines.append(
+                    f"・[シート] {d.get('shop_name')} / {d.get('created_at') or d.get('date')} / "
+                    f"{int(d.get('total_amount') or 0):,} 円"
+                )
+        except Exception:  # noqa: BLE001
+            sheet_dupes = []
+
+        local_dupes = db.find_local_duplicates(
+            shop_name=payload["shop_name"],
+            date=payload["date"],
+            total_amount=payload["total_amount"],
+            item_count=len(items),
+        )
+        for d in local_dupes[:3]:
+            dup_lines.append(
+                f"・[ローカル] {d.get('shop_name')} / {d.get('date')} / "
+                f"{int(float(d.get('total_amount') or 0)):,} 円"
+            )
+
+        if dup_lines:
+            msg = (
+                "同じようなレシートがすでに保存されています。\n"
+                "（店名＋日付＋合計が一致）\n\n"
+                f"今回: {payload['shop_name']} / {payload['date']} / "
+                f"{int(payload['total_amount']):,} 円\n\n"
+                "既存:\n"
+                + "\n".join(dup_lines)
+                + "\n\nそれでも新規として保存しますか？"
+            )
+            reply = QMessageBox.question(
+                self,
+                "重複の確認",
+                msg,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+
         image_path = self.image_edit.text().strip() if hasattr(self, "image_edit") else ""
         try:
             if image_path:

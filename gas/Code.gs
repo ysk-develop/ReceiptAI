@@ -66,6 +66,13 @@ function doGet(e) {
       result = getImageMeta_(p.id || '', p.data === '1' || p.data === 'true');
     } else if (action === 'delete') {
       result = deleteReceipt_(p.id || '', p.delete_image !== '0');
+    } else if (action === 'duplicates') {
+      result = findDuplicates_(
+        p.shop || p.shop_name || '',
+        p.date || '',
+        Number(p.total || p.total_amount || 0),
+        p.items != null && p.items !== '' ? Number(p.items) : null
+      );
     } else {
       result = { status: 'error', message: 'unknown action' };
     }
@@ -211,6 +218,87 @@ function listReceipts_(month, limit) {
     return a.date < b.date ? 1 : -1;
   });
   return { status: 'ok', receipts: list.slice(0, limit) };
+}
+
+/**
+ * 重複候補検索（店名＋日付＋合計。品目数指定時はそれも一致）
+ */
+function findDuplicates_(shop, dateStr, total, itemCount) {
+  var shopKey = normalizeShopKey_(shop);
+  var day = dayKey_(dateStr);
+  var totalN = Math.round(Number(total) || 0);
+  var wantItems = itemCount != null && !isNaN(Number(itemCount)) ? Number(itemCount) : null;
+
+  if (!shopKey || !day) {
+    return {
+      status: 'ok',
+      duplicates: [],
+      match: { shop: shop, date: day, total: totalN, item_count: wantItems }
+    };
+  }
+
+  var sheet = getSheet_();
+  var last = sheet.getLastRow();
+  if (last < 2) {
+    return {
+      status: 'ok',
+      duplicates: [],
+      match: { shop: shop, date: day, total: totalN, item_count: wantItems }
+    };
+  }
+
+  var values = sheet.getRange(2, 1, last - 1, HEADERS.length).getValues();
+  var map = {};
+  for (var i = 0; i < values.length; i++) {
+    var row = values[i];
+    var rid = String(row[1] || '');
+    if (!rid) continue;
+    if (!map[rid]) {
+      map[rid] = {
+        receipt_id: rid,
+        created_at: normalizeDateTimeCell_(row[0]),
+        date: normalizeDateCell_(row[2]),
+        shop_name: String(row[3] || ''),
+        total_amount: Number(row[4] || 0),
+        item_count: 0
+      };
+    }
+    map[rid].item_count += 1;
+  }
+
+  var dupes = [];
+  for (var k in map) {
+    if (!map.hasOwnProperty(k)) continue;
+    var r = map[k];
+    if (normalizeShopKey_(r.shop_name) !== shopKey) continue;
+    if (dayKey_(r.date) !== day) continue;
+    if (Math.round(Number(r.total_amount) || 0) !== totalN) continue;
+    if (wantItems != null && Number(r.item_count) !== wantItems) continue;
+    dupes.push(r);
+  }
+
+  dupes.sort(function (a, b) {
+    return a.created_at < b.created_at ? 1 : -1;
+  });
+
+  return {
+    status: 'ok',
+    duplicates: dupes.slice(0, 10),
+    match: { shop: shop, date: day, total: totalN, item_count: wantItems }
+  };
+}
+
+function normalizeShopKey_(s) {
+  return String(s || '')
+    .replace(/[ 　\t\r\n]+/g, '')
+    .toLowerCase();
+}
+
+function dayKey_(dateStr) {
+  var n = normalizeDateCell_(dateStr);
+  var m = String(n).match(/(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
+  if (!m) return '';
+  return m[1] + '-' + pad2_(m[2]) + '-' + pad2_(m[3]);
 }
 
 /**

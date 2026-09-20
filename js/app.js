@@ -5,7 +5,7 @@ import {
 import { CATEGORIES, normalizeCategory } from './categories.js';
 import {
   fetchModels, analyzeReceipt, sendToGas, pingGas,
-  listReceipts, getReceipt, fetchReceiptImage, deleteReceipt
+  listReceipts, getReceipt, fetchReceiptImage, deleteReceipt, findDuplicateReceipts
 } from './gemini-api.js';
 import { resizeImageFile } from './image-util.js';
 import {
@@ -774,6 +774,41 @@ function rememberSharedImage(saveResult) {
   };
 }
 
+function formatDuplicateConfirm(dupes, shop, dateStr, total) {
+  const lines = dupes.slice(0, 3).map((d) => {
+    const when = formatDateTimeDisplay(d.created_at || d.date);
+    return `・${d.shop_name} / ${when} / ${Number(d.total_amount || 0).toLocaleString()} 円（${d.item_count || '?'}品目）`;
+  });
+  return (
+    `同じようなレシートがすでに保存されています。\n` +
+    `（店名＋日付＋合計が一致）\n\n` +
+    `今回: ${shop} / ${dateStr} / ${Number(total).toLocaleString()} 円\n\n` +
+    `既存:\n${lines.join('\n')}` +
+    (dupes.length > 3 ? `\n…ほか ${dupes.length - 3} 件` : '') +
+    `\n\nそれでも新規として保存しますか？\n（キャンセルで保存しません）`
+  );
+}
+
+/** @returns {Promise<boolean>} true = 保存してよい */
+async function confirmNoDuplicateOrProceed(gasUrl, payload) {
+  try {
+    const dupes = await findDuplicateReceipts(gasUrl, {
+      shop_name: payload.shop_name,
+      date: payload.date,
+      total_amount: payload.total_amount,
+      item_count: (payload.items || []).length
+    });
+    if (!dupes.length) return true;
+    return confirm(
+      formatDuplicateConfirm(dupes, payload.shop_name, payload.date, payload.total_amount)
+    );
+  } catch (err) {
+    // チェック失敗でも保存は止めない（オフライン等）
+    console.warn('duplicate check failed', err);
+    return true;
+  }
+}
+
 async function handleSend() {
   clearMessage();
   const gasUrl = requireGasUrl();
@@ -796,6 +831,17 @@ async function handleSend() {
   };
 
   $('sendBtn').disabled = true;
+  $('sendBtn').textContent = '確認中...';
+  try {
+    const ok = await confirmNoDuplicateOrProceed(gasUrl, payload);
+    if (!ok) {
+      showMessage('保存をキャンセルしました', 'success');
+      return;
+    }
+  } catch {
+    /* ignore */
+  }
+
   $('sendBtn').textContent = '送信中...';
   try {
     // 同一写真の複数レシート: 最初の1回だけアップロードし、以降は同じ画像IDを付与
@@ -840,9 +886,10 @@ async function handleSendAll() {
   }
 
   $('sendAllBtn').disabled = true;
-  $('sendAllBtn').textContent = '一括送信中...';
+  $('sendAllBtn').textContent = '確認中...';
   let ok = 0;
   let fail = 0;
+  let skipped = 0;
   try {
     for (let i = 0; i < analyzedReceipts.length; i++) {
       const r = analyzedReceipts[i];
@@ -853,9 +900,10 @@ async function handleSendAll() {
         const excl = Number(it.price_excl ?? it.price) || 0;
         const rateType = normalizeRateType(it.tax_rate_type, tax);
         const { incl, rate } = calcInclusive(excl, rateType, tax);
+        const price = it.incl_override != null ? Number(it.incl_override) : incl;
         return {
           name: it.name,
-          price: incl,
+          price,
           price_excl: excl,
           tax_rate: rate,
           tax_rate_type: rateType,
@@ -869,6 +917,15 @@ async function handleSendAll() {
         total_amount: itemsSave.reduce((s, it) => s + it.price, 0),
         items: itemsSave
       };
+
+      $('sendAllBtn').textContent = `確認中 (${i + 1}/${analyzedReceipts.length})...`;
+      const proceed = await confirmNoDuplicateOrProceed(gasUrl, payload);
+      if (!proceed) {
+        skipped += 1;
+        continue;
+      }
+
+      $('sendAllBtn').textContent = `送信中 (${i + 1}/${analyzedReceipts.length})...`;
       try {
         const uploadFresh = Boolean(uploadImageBase64) && !sharedUploadImage;
         const result = await saveOnePayload(gasUrl, payload, {
@@ -878,7 +935,6 @@ async function handleSendAll() {
         if (result.verified) {
           rememberSharedImage(result);
         } else if (uploadFresh) {
-          // 初回が未確認なら、残りも画像本体を送る（Drive上は重複しうる）
           sharedUploadImage = null;
         }
         ok += 1;
@@ -887,8 +943,14 @@ async function handleSendAll() {
       }
     }
     setGasUrl(gasUrl);
-    showMessage(`一括保存: 成功 ${ok} / 失敗 ${fail}`, fail ? 'error' : 'success');
-    if (fail === 0) handleClear();
+    showMessage(
+      `一括保存: 成功 ${ok} / スキップ ${skipped} / 失敗 ${fail}`,
+      fail ? 'error' : 'success'
+    );
+    if (fail === 0 && skipped === 0) handleClear();
+    else if (fail === 0 && ok > 0) {
+      // 一部スキップ時は画面を残す
+    }
   } finally {
     $('sendAllBtn').disabled = false;
     $('sendAllBtn').textContent = '☁ 検出した全レシートを保存';

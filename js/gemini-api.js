@@ -376,6 +376,25 @@ export async function deleteReceipt(gasUrl, receiptId, { deleteImage = true } = 
   return data;
 }
 
+/** Find likely duplicate receipts (shop + date + total [+ item count]). */
+export async function findDuplicateReceipts(
+  gasUrl,
+  { shop_name, date, total_amount, item_count = null } = {}
+) {
+  const params = {
+    action: 'duplicates',
+    shop: shop_name || '',
+    date: date || '',
+    total: String(Math.round(Number(total_amount) || 0))
+  };
+  if (item_count != null && item_count !== '') {
+    params.items = String(item_count);
+  }
+  const data = await gasJsonp(gasUrl, params, 60000);
+  if (data.status !== 'ok') throw new Error(data.message || '重複チェック失敗');
+  return data.duplicates || [];
+}
+
 /** Fetch receipt image bytes via GAS (avoids broken Drive hotlink in <img>). */
 export async function fetchReceiptImage(gasUrl, fileId) {
   if (!fileId) throw new Error('画像IDがありません');

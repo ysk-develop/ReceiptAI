@@ -270,6 +270,51 @@ def delete_by_cloud_id(cloud_receipt_id: str, db_path: Path | None = None) -> in
         return int(cur.rowcount or 0)
 
 
+def _norm_shop(s: str) -> str:
+    return "".join(str(s or "").split()).lower()
+
+
+def _day_key(date_str: str) -> str:
+    import re
+
+    m = re.search(r"(\d{4})[/\-](\d{1,2})[/\-](\d{1,2})", str(date_str or ""))
+    if not m:
+        return ""
+    return f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+
+
+def find_local_duplicates(
+    *,
+    shop_name: str,
+    date: str,
+    total_amount: float | int,
+    item_count: int | None = None,
+    db_path: Path | None = None,
+) -> list[dict[str, Any]]:
+    """Find local receipts matching shop + day + total (+ optional item count)."""
+    shop_key = _norm_shop(shop_name)
+    day = _day_key(date)
+    total_n = int(round(float(total_amount or 0)))
+    if not shop_key or not day:
+        return []
+    rows = list_receipts(db_path=db_path)
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        if _norm_shop(str(r.get("shop_name") or "")) != shop_key:
+            continue
+        if _day_key(str(r.get("date") or "")) != day:
+            continue
+        if int(round(float(r.get("total_amount") or 0))) != total_n:
+            continue
+        if item_count is not None:
+            items = get_receipt(int(r["id"]), db_path=db_path)
+            n = len((items or {}).get("items") or [])
+            if n != int(item_count):
+                continue
+        out.append(dict(r))
+    return out
+
+
 def list_receipts(
     *,
     year_month: str | None = None,

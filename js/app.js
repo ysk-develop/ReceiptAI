@@ -795,15 +795,14 @@ async function confirmNoDuplicateOrProceed(gasUrl, payload) {
     const dupes = await findDuplicateReceipts(gasUrl, {
       shop_name: payload.shop_name,
       date: payload.date,
-      total_amount: payload.total_amount,
-      item_count: (payload.items || []).length
+      total_amount: payload.total_amount
+      // 品目数は条件に入れない（編集・端数調整でずれやすい）
     });
     if (!dupes.length) return true;
     return confirm(
       formatDuplicateConfirm(dupes, payload.shop_name, payload.date, payload.total_amount)
     );
   } catch (err) {
-    // チェック失敗でも保存は止めない（オフライン等）
     console.warn('duplicate check failed', err);
     return true;
   }
@@ -838,12 +837,8 @@ async function handleSend() {
       showMessage('保存をキャンセルしました', 'success');
       return;
     }
-  } catch {
-    /* ignore */
-  }
 
-  $('sendBtn').textContent = '送信中...';
-  try {
+    $('sendBtn').textContent = '送信中...';
     // 同一写真の複数レシート: 最初の1回だけアップロードし、以降は同じ画像IDを付与
     const uploadFresh = Boolean(uploadImageBase64) && !sharedUploadImage;
     const result = await saveOnePayload(gasUrl, payload, {
@@ -886,7 +881,6 @@ async function handleSendAll() {
   }
 
   $('sendAllBtn').disabled = true;
-  $('sendAllBtn').textContent = '確認中...';
   let ok = 0;
   let fail = 0;
   let skipped = 0;
@@ -902,14 +896,17 @@ async function handleSendAll() {
         const { incl, rate } = calcInclusive(excl, rateType, tax);
         const price = it.incl_override != null ? Number(it.incl_override) : incl;
         return {
-          name: it.name,
+          name: it.name || '（未入力）',
           price,
           price_excl: excl,
           tax_rate: rate,
           tax_rate_type: rateType,
           category: it.category || 'その他'
         };
-      });
+      }).filter((it) => it.name || it.price > 0);
+
+      if (!itemsSave.length) continue;
+
       const payload = {
         timestamp: new Date().toISOString(),
         shop_name: r.shop_name || '不明',
@@ -947,10 +944,9 @@ async function handleSendAll() {
       `一括保存: 成功 ${ok} / スキップ ${skipped} / 失敗 ${fail}`,
       fail ? 'error' : 'success'
     );
-    if (fail === 0 && skipped === 0) handleClear();
-    else if (fail === 0 && ok > 0) {
-      // 一部スキップ時は画面を残す
-    }
+    if (fail === 0 && skipped === 0 && ok > 0) handleClear();
+  } catch (err) {
+    showMessage(`一括保存エラー: ${err.message}`);
   } finally {
     $('sendAllBtn').disabled = false;
     $('sendAllBtn').textContent = '☁ 検出した全レシートを保存';

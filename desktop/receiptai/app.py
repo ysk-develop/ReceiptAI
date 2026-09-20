@@ -990,7 +990,6 @@ class MainWindow(QMainWindow):
                 shop_name=payload["shop_name"],
                 date=payload["date"],
                 total_amount=payload["total_amount"],
-                item_count=len(items),
             )
             for d in sheet_dupes[:3]:
                 dup_lines.append(
@@ -1004,7 +1003,6 @@ class MainWindow(QMainWindow):
             shop_name=payload["shop_name"],
             date=payload["date"],
             total_amount=payload["total_amount"],
-            item_count=len(items),
         )
         for d in local_dupes[:3]:
             dup_lines.append(

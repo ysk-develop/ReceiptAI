@@ -24,6 +24,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QStatusBar,
     QTabWidget,
@@ -40,8 +41,9 @@ from .image_util import resize_to_jpeg_base64
 from .styles import APP_STYLESHEET
 from .tax_util import calc_inclusive, normalize_rate_type
 
-LIST_ROW_HEIGHT = 36
-TABLE_BTN_HEIGHT = 28
+LIST_ROW_HEIGHT = 40
+TABLE_BTN_W = 72
+TABLE_BTN_H = 26
 
 
 def _btn(text: str, object_name: str | None = None) -> QPushButton:
@@ -51,30 +53,66 @@ def _btn(text: str, object_name: str | None = None) -> QPushButton:
     return b
 
 
-def _wrap_table_button(btn: QPushButton, *, width: int = 64) -> QWidget:
-    """Cell widget wrapper so the button sits neatly inside the cell (not stretched)."""
-    btn.setFixedSize(width, TABLE_BTN_HEIGHT)
+def _make_compact_button(
+    text: str,
+    object_name: str,
+    *,
+    width: int = TABLE_BTN_W,
+    height: int = TABLE_BTN_H,
+) -> QPushButton:
+    """Fixed-size button; colors via inline sheet so global padding cannot inflate it."""
+    colors = {
+        "SecondaryButton": ("#e0f2f1", "#134e4a", "#b2dfdb"),
+        "AccentButton": ("#14b8a6", "#ffffff", "#0d9488"),
+        "DangerButton": ("#dc2626", "#ffffff", "#b91c1c"),
+        "GhostDangerButton": ("#fee2e2", "#dc2626", "#fecaca"),
+    }
+    bg, fg, hover = colors.get(object_name, ("#0f766e", "#ffffff", "#0d5f58"))
+    btn = QPushButton(text)
+    btn.setObjectName(object_name)
     btn.setCursor(Qt.CursorShape.PointingHandCursor)
-    cell = QWidget()
-    cell.setObjectName("TableActionCell")
-    lay = QHBoxLayout(cell)
-    lay.setContentsMargins(4, 2, 4, 2)
-    lay.setSpacing(0)
-    lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
-    lay.addWidget(btn)
-    return cell
+    btn.setFixedSize(width, height)
+    btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+    btn.setStyleSheet(
+        "QPushButton {"
+        f"background-color:{bg}; color:{fg}; "
+        f"min-height:{height}px; max-height:{height}px; "
+        f"min-width:{width}px; max-width:{width}px; "
+        "padding:0px; margin:0px; border:none; border-radius:6px; "
+        "font-size:12px; font-weight:600;"
+        "}"
+        f"QPushButton:hover {{ background-color:{hover}; }}"
+        "QPushButton:disabled { background-color:#ccfbf1; color:#5f8a85; }"
+    )
+    return btn
 
 
-def _table_action_button(
+def _table_cell_button(
     text: str,
     object_name: str,
     callback,
     *,
-    width: int = 64,
+    width: int = TABLE_BTN_W,
+    height: int = TABLE_BTN_H,
 ) -> QWidget:
-    btn = _btn(text, object_name)
+    """
+    Center a compact button inside a table cell.
+    Margins are derived from LIST_ROW_HEIGHT so the button never clips.
+    """
+    btn = _make_compact_button(text, object_name, width=width, height=height)
     btn.clicked.connect(callback)
-    return _wrap_table_button(btn, width=width)
+
+    vpad = max(0, (LIST_ROW_HEIGHT - height) // 2)
+    hpad = 8
+    cell = QWidget()
+    cell.setFixedHeight(LIST_ROW_HEIGHT)
+    lay = QHBoxLayout(cell)
+    lay.setContentsMargins(hpad, vpad, hpad, vpad)
+    lay.setSpacing(0)
+    lay.addStretch(1)
+    lay.addWidget(btn, 0, Qt.AlignmentFlag.AlignCenter)
+    lay.addStretch(1)
+    return cell
 
 
 def _card() -> QFrame:
@@ -209,10 +247,11 @@ class MainWindow(QMainWindow):
         hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
         hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
         hdr.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
-        self.list_table.setColumnWidth(3, 76)
-        self.list_table.setColumnWidth(4, 76)
-        self.list_table.setColumnWidth(5, 76)
+        self.list_table.setColumnWidth(3, 88)
+        self.list_table.setColumnWidth(4, 88)
+        self.list_table.setColumnWidth(5, 88)
         self.list_table.verticalHeader().setDefaultSectionSize(LIST_ROW_HEIGHT)
+        self.list_table.verticalHeader().setMinimumSectionSize(LIST_ROW_HEIGHT)
         tv.addWidget(self.list_table)
         layout.addWidget(table_card, 1)
 
@@ -261,7 +300,7 @@ class MainWindow(QMainWindow):
             self.list_table.setCellWidget(
                 row,
                 3,
-                _table_action_button(
+                _table_cell_button(
                     "編集",
                     "SecondaryButton",
                     lambda _=False, i=rid: self.open_receipt(i),
@@ -271,7 +310,7 @@ class MainWindow(QMainWindow):
             view_url = str(r.get("image_view_url") or "")
             file_id = str(r.get("image_file_id") or "")
             has_img = bool(view_url or file_id)
-            img_cell = _table_action_button(
+            img_cell = _table_cell_button(
                 "画像",
                 "AccentButton",
                 lambda _=False, u=view_url, f=file_id: self.show_receipt_image(u, f),
@@ -285,7 +324,7 @@ class MainWindow(QMainWindow):
             self.list_table.setCellWidget(
                 row,
                 5,
-                _table_action_button(
+                _table_cell_button(
                     "削除",
                     "DangerButton",
                     lambda _=False, i=rid, c=cloud_id, shop=str(r["shop_name"]), d=str(r["date"]):
@@ -416,9 +455,18 @@ class MainWindow(QMainWindow):
             combo.setCurrentText("その他")
         self.items_table.setCellWidget(row, 4, combo)
 
-        rm = _btn("✕", "GhostDangerButton")
+        rm = _make_compact_button("✕", "GhostDangerButton", width=28, height=TABLE_BTN_H)
         rm.clicked.connect(self._remove_item_row_by_button)
-        self.items_table.setCellWidget(row, 5, _wrap_table_button(rm, width=32))
+        vpad = max(0, (LIST_ROW_HEIGHT - TABLE_BTN_H) // 2)
+        cell = QWidget()
+        cell.setFixedHeight(LIST_ROW_HEIGHT)
+        lay = QHBoxLayout(cell)
+        lay.setContentsMargins(8, vpad, 8, vpad)
+        lay.setSpacing(0)
+        lay.addStretch(1)
+        lay.addWidget(rm, 0, Qt.AlignmentFlag.AlignCenter)
+        lay.addStretch(1)
+        self.items_table.setCellWidget(row, 5, cell)
         self.items_table.blockSignals(False)
         self._recalc_total()
 

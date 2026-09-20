@@ -212,14 +212,6 @@ QTableWidget {{
     alternate-background-color: #f8fffe;
 }}
 
-QTableWidget::item {{
-    padding: 4px 8px;
-}}
-
-QWidget#TableActionCell {{
-    background: transparent;
-}}
-
 QHeaderView::section {{
     background: #e0f2f1;
     color: {PRIMARY};

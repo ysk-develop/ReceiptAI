@@ -40,12 +40,41 @@ from .image_util import resize_to_jpeg_base64
 from .styles import APP_STYLESHEET
 from .tax_util import calc_inclusive, normalize_rate_type
 
+LIST_ROW_HEIGHT = 36
+TABLE_BTN_HEIGHT = 28
+
 
 def _btn(text: str, object_name: str | None = None) -> QPushButton:
     b = QPushButton(text)
     if object_name:
         b.setObjectName(object_name)
     return b
+
+
+def _wrap_table_button(btn: QPushButton, *, width: int = 64) -> QWidget:
+    """Cell widget wrapper so the button sits neatly inside the cell (not stretched)."""
+    btn.setFixedSize(width, TABLE_BTN_HEIGHT)
+    btn.setCursor(Qt.CursorShape.PointingHandCursor)
+    cell = QWidget()
+    cell.setObjectName("TableActionCell")
+    lay = QHBoxLayout(cell)
+    lay.setContentsMargins(4, 2, 4, 2)
+    lay.setSpacing(0)
+    lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    lay.addWidget(btn)
+    return cell
+
+
+def _table_action_button(
+    text: str,
+    object_name: str,
+    callback,
+    *,
+    width: int = 64,
+) -> QWidget:
+    btn = _btn(text, object_name)
+    btn.clicked.connect(callback)
+    return _wrap_table_button(btn, width=width)
 
 
 def _card() -> QFrame:
@@ -168,10 +197,22 @@ class MainWindow(QMainWindow):
         tv.setContentsMargins(8, 8, 8, 8)
         self.list_table = QTableWidget(0, 6)
         self.list_table.setHorizontalHeaderLabels(["日付", "店舗", "合計", "編集", "画像", "削除"])
-        self.list_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.list_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.list_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.list_table.verticalHeader().setVisible(False)
+        self.list_table.setShowGrid(True)
+        self.list_table.setAlternatingRowColors(True)
+        hdr = self.list_table.horizontalHeader()
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
+        hdr.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
+        self.list_table.setColumnWidth(3, 76)
+        self.list_table.setColumnWidth(4, 76)
+        self.list_table.setColumnWidth(5, 76)
+        self.list_table.verticalHeader().setDefaultSectionSize(LIST_ROW_HEIGHT)
         tv.addWidget(self.list_table)
         layout.addWidget(table_card, 1)
 
@@ -209,37 +250,48 @@ class MainWindow(QMainWindow):
         for r in rows:
             row = self.list_table.rowCount()
             self.list_table.insertRow(row)
+            self.list_table.setRowHeight(row, LIST_ROW_HEIGHT)
             self.list_table.setItem(row, 0, QTableWidgetItem(str(r["date"])))
             self.list_table.setItem(row, 1, QTableWidgetItem(str(r["shop_name"])))
             amt = QTableWidgetItem(f'{float(r["total_amount"]):,.0f} 円')
             amt.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             self.list_table.setItem(row, 2, amt)
 
-            btn = _btn("編集", "SecondaryButton")
-            btn.setFixedWidth(72)
             rid = int(r["id"])
-            btn.clicked.connect(lambda _=False, i=rid: self.open_receipt(i))
-            self.list_table.setCellWidget(row, 3, btn)
+            self.list_table.setCellWidget(
+                row,
+                3,
+                _table_action_button(
+                    "編集",
+                    "SecondaryButton",
+                    lambda _=False, i=rid: self.open_receipt(i),
+                ),
+            )
 
-            img_btn = _btn("画像", "AccentButton")
-            img_btn.setFixedWidth(72)
             view_url = str(r.get("image_view_url") or "")
             file_id = str(r.get("image_file_id") or "")
             has_img = bool(view_url or file_id)
-            img_btn.setEnabled(has_img)
-            img_btn.clicked.connect(
-                lambda _=False, u=view_url, f=file_id: self.show_receipt_image(u, f)
+            img_cell = _table_action_button(
+                "画像",
+                "AccentButton",
+                lambda _=False, u=view_url, f=file_id: self.show_receipt_image(u, f),
             )
-            self.list_table.setCellWidget(row, 4, img_btn)
+            img_btn = img_cell.findChild(QPushButton)
+            if img_btn is not None:
+                img_btn.setEnabled(has_img)
+            self.list_table.setCellWidget(row, 4, img_cell)
 
-            del_btn = _btn("削除", "DangerButton")
-            del_btn.setFixedWidth(72)
             cloud_id = str(r.get("cloud_receipt_id") or "")
-            del_btn.clicked.connect(
-                lambda _=False, i=rid, c=cloud_id, shop=str(r["shop_name"]), d=str(r["date"]):
-                self.delete_receipt_row(i, c, shop, d)
+            self.list_table.setCellWidget(
+                row,
+                5,
+                _table_action_button(
+                    "削除",
+                    "DangerButton",
+                    lambda _=False, i=rid, c=cloud_id, shop=str(r["shop_name"]), d=str(r["date"]):
+                    self.delete_receipt_row(i, c, shop, d),
+                ),
             )
-            self.list_table.setCellWidget(row, 5, del_btn)
 
     # ── edit ───────────────────────────────────────────────
     def _build_edit_tab(self) -> None:
@@ -287,6 +339,7 @@ class MainWindow(QMainWindow):
         self.items_table.setColumnWidth(3, 80)
         self.items_table.setColumnWidth(4, 120)
         self.items_table.setColumnWidth(5, 48)
+        self.items_table.verticalHeader().setDefaultSectionSize(LIST_ROW_HEIGHT)
         self.items_table.itemChanged.connect(self._on_item_changed)
         iv.addWidget(self.items_table, 1)
 
@@ -326,6 +379,7 @@ class MainWindow(QMainWindow):
         self.items_table.blockSignals(True)
         row = self.items_table.rowCount()
         self.items_table.insertRow(row)
+        self.items_table.setRowHeight(row, LIST_ROW_HEIGHT)
         self.items_table.setItem(row, 0, QTableWidgetItem(str(name)))
 
         spin = QSpinBox()
@@ -363,9 +417,8 @@ class MainWindow(QMainWindow):
         self.items_table.setCellWidget(row, 4, combo)
 
         rm = _btn("✕", "GhostDangerButton")
-        rm.setFixedWidth(36)
-        rm.clicked.connect(lambda _=False, r=row: self._remove_item_row_by_button())
-        self.items_table.setCellWidget(row, 5, rm)
+        rm.clicked.connect(self._remove_item_row_by_button)
+        self.items_table.setCellWidget(row, 5, _wrap_table_button(rm, width=32))
         self.items_table.blockSignals(False)
         self._recalc_total()
 
@@ -374,7 +427,10 @@ class MainWindow(QMainWindow):
         if btn is None:
             return
         for row in range(self.items_table.rowCount()):
-            if self.items_table.cellWidget(row, 5) is btn:
+            cell = self.items_table.cellWidget(row, 5)
+            if cell is None:
+                continue
+            if cell is btn or cell.findChild(QPushButton) is btn:
                 self.items_table.removeRow(row)
                 self._recalc_total()
                 return

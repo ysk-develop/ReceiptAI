@@ -209,6 +209,15 @@ QTableWidget {{
     gridline-color: #e0f2f1;
     selection-background-color: #ccfbf1;
     selection-color: {TEXT};
+    alternate-background-color: #f8fffe;
+}}
+
+QTableWidget::item {{
+    padding: 4px 8px;
+}}
+
+QWidget#TableActionCell {{
+    background: transparent;
 }}
 
 QHeaderView::section {{
@@ -231,10 +240,10 @@ QPushButton {{
     background-color: {PRIMARY};
     color: white;
     border: none;
-    border-radius: 10px;
-    padding: 8px 14px;
+    border-radius: 8px;
+    padding: 6px 12px;
     font-weight: 600;
-    min-height: 32px;
+    min-height: 28px;
 }}
 QPushButton:hover {{
     background-color: {PRIMARY_HOVER};

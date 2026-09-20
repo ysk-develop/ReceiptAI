@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtWidgets import QApplication, QMessageBox
+from PyQt6.QtWidgets import QApplication, QMessageBox, QPushButton
 
 from receiptai import charts, db, importer
 from receiptai.app import MainWindow
@@ -128,7 +128,9 @@ class DesktopAppTests(unittest.TestCase):
         self.assertEqual(win.items_table.rowCount(), 2)
         btn = win.items_table.cellWidget(1, 5)
         self.assertIsNotNone(btn)
-        btn.click()
+        push = btn if isinstance(btn, QPushButton) else btn.findChild(QPushButton)
+        self.assertIsNotNone(push)
+        push.click()
         self.assertEqual(win.items_table.rowCount(), 1)
         win.close()
 

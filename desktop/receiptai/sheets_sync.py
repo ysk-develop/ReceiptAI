@@ -7,20 +7,27 @@ from typing import Any
 from . import db, gas_client
 
 
-def sync_from_sheet(gas_url: str, *, month: str = "", limit: int = 100) -> dict[str, Any]:
+def sync_from_sheet(gas_url: str, *, month: str = "", limit: int = 200) -> dict[str, Any]:
+    """
+    Pull sheet receipts into local DB, then remove local cloud-synced rows
+    that no longer exist on the sheet (physical delete on phone is reflected).
+    """
     summaries = gas_client.list_receipts(gas_url, month=month, limit=limit)
     created = 0
     updated = 0
     errors: list[str] = []
+    seen_ids: set[str] = set()
 
     for summary in summaries:
         rid = str(summary.get("receipt_id") or "")
         if not rid:
             continue
+        seen_ids.add(rid)
         try:
             full = gas_client.get_receipt(gas_url, rid)
             items = full.get("items") or []
             if not items:
+                # Empty on sheet → treat as gone
                 continue
             _, is_new = db.upsert_cloud_receipt(
                 rid,
@@ -37,9 +44,14 @@ def sync_from_sheet(gas_url: str, *, month: str = "", limit: int = 100) -> dict[
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{rid}: {exc}")
 
+    # Reflect sheet deletions: drop local cloud rows missing from this fetch
+    year_month = month.strip() or None
+    removed = db.prune_cloud_receipts(seen_ids, year_month=year_month)
+
     return {
         "fetched": len(summaries),
         "created": created,
         "updated": updated,
+        "removed": removed,
         "errors": errors,
     }

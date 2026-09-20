@@ -270,6 +270,44 @@ def delete_by_cloud_id(cloud_receipt_id: str, db_path: Path | None = None) -> in
         return int(cur.rowcount or 0)
 
 
+def prune_cloud_receipts(
+    keep_cloud_ids: set[str] | list[str],
+    *,
+    year_month: str | None = None,
+    db_path: Path | None = None,
+) -> int:
+    """
+    Remove local rows that came from the sheet (have cloud_receipt_id)
+    but are no longer present in keep_cloud_ids.
+
+    If year_month is set (YYYY-MM), only prune rows whose date falls in that month.
+    Local-only rows (no cloud_receipt_id) are never deleted.
+    """
+    keep = {str(x) for x in keep_cloud_ids if x}
+    ym = (year_month or "").strip()
+    with get_conn(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT id, cloud_receipt_id, date FROM receipts
+            WHERE cloud_receipt_id IS NOT NULL
+              AND cloud_receipt_id != ''
+            """
+        ).fetchall()
+
+        deleted = 0
+        for row in rows:
+            cid = str(row["cloud_receipt_id"] or "")
+            if not cid or cid in keep:
+                continue
+            if ym:
+                day = _day_key(str(row["date"] or ""))
+                if not day.startswith(ym):
+                    continue
+            conn.execute("DELETE FROM receipts WHERE id = ?", (int(row["id"]),))
+            deleted += 1
+        return deleted
+
+
 def _norm_shop(s: str) -> str:
     return "".join(str(s or "").split()).lower()
 

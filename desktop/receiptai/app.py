@@ -1047,7 +1047,7 @@ class MainWindow(QMainWindow):
         self.status.showMessage("シートから同期中…")
 
         def work() -> dict:
-            return sheets_sync.sync_from_sheet(url, month=month, limit=100)
+            return sheets_sync.sync_from_sheet(url, month=month, limit=200)
 
         worker = Worker(work)
         worker.finished_ok.connect(self._sync_done)
@@ -1059,7 +1059,8 @@ class MainWindow(QMainWindow):
         data = result if isinstance(result, dict) else {}
         msg = (
             f"取得 {data.get('fetched', 0)} 件\n"
-            f"新規 {data.get('created', 0)} / 更新 {data.get('updated', 0)}"
+            f"新規 {data.get('created', 0)} / 更新 {data.get('updated', 0)} / "
+            f"削除反映 {data.get('removed', 0)}"
         )
         errs = data.get("errors") or []
         if errs:

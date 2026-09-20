@@ -36,7 +36,11 @@ const LINE_SCHEMA = {
       description: '画像内のレシート番号（左から1,2,3...）。同じ紙は同じ番号'
     },
     shop_name: { type: 'string', description: 'そのレシートの店舗名' },
-    date: { type: 'string', description: 'そのレシートの日付 YYYY-MM-DD' },
+    date: {
+      type: 'string',
+      description:
+        'レシート印字の日時。時刻があれば YYYY-MM-DD HH:mm:ss、日付のみなら YYYY-MM-DD'
+    },
     total_amount: {
       type: 'number',
       description: 'そのレシート印字の税込合計（参考値）'
@@ -99,7 +103,7 @@ function buildPrompt(today, memo) {
 - 小計・消費税・内税・外税・合計の行は lines に入れない。
 
 カテゴリは次から選択: [${categoryList}]
-不明な日付のみ ${today} を使う。店舗名が読めないときのみ「不明」。
+不明な日付のみ ${today} を使う。時刻が印字されていれば date に含める。店舗名が読めないときのみ「不明」。
 JSONのみ出力。`;
   if (memo) text += `\n\n【入力メモ】\n${memo}`;
   return text;
@@ -112,21 +116,40 @@ function buildRetryPrompt(today, expectedCount, gotCount) {
 JSONのみ。`;
 }
 
+function localTodayStr() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/** Accept YYYY-MM-DD or YYYY-MM-DD HH:mm[:ss] / with slashes; else fallback */
+function normalizeReceiptDate(value, fallback) {
+  const s = String(value || '').trim();
+  const m = s.match(
+    /^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})(?:[ T](\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/
+  );
+  if (!m) return fallback;
+  const p = (n) => String(n).padStart(2, '0');
+  let out = `${m[1]}-${p(m[2])}-${p(m[3])}`;
+  if (m[4] != null) {
+    out += ` ${p(m[4])}:${p(m[5])}:${p(m[6] || '0')}`;
+  }
+  return out;
+}
+
 /**
  * Group flat lines (or legacy receipts[]) into receipt objects.
  */
-export function normalizeAnalysisResult(parsed, today = new Date().toISOString().slice(0, 10)) {
+export function normalizeAnalysisResult(parsed, today = localTodayStr()) {
   // New flat format
   if (parsed && Array.isArray(parsed.lines) && parsed.lines.length) {
     const groups = new Map();
     for (const line of parsed.lines) {
       const idx = Number(line.receipt_index) || 1;
       if (!groups.has(idx)) {
-        let dateStr = String(line.date || '').trim();
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) dateStr = today;
         groups.set(idx, {
           shop_name: String(line.shop_name || '不明').trim() || '不明',
-          date: dateStr,
+          date: normalizeReceiptDate(line.date, today),
           total_amount: Number(line.total_amount) || 0,
           items: []
         });
@@ -183,8 +206,7 @@ export function normalizeAnalysisResult(parsed, today = new Date().toISOString()
     let total = Number(r.total_amount);
     if (!Number.isFinite(total) || total <= 0) total = itemsSum;
 
-    let dateStr = String(r.date || '').trim();
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) dateStr = today;
+    let dateStr = normalizeReceiptDate(r.date, today);
 
     return {
       shop_name: String(r.shop_name || '不明').trim() || '不明',
@@ -223,7 +245,7 @@ async function callGeminiJson(apiKey, model, parts, schema) {
 }
 
 export async function analyzeReceipt(apiKey, model, { base64Data, mimeType, memo }) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localTodayStr();
   const mediaParts = [];
   if (base64Data) {
     mediaParts.push({ inlineData: { mimeType: mimeType || 'image/jpeg', data: base64Data } });

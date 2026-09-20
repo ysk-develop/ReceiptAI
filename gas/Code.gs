@@ -117,7 +117,7 @@ function ping_() {
 function saveReceipt_(data) {
   var items = data.items || [];
   if (!items.length) throw new Error('明細が空です');
-  var dateStr = String(data.date || '').trim();
+  var dateStr = normalizeDateCell_(data.date);
   if (!dateStr) throw new Error('日付がありません');
 
   var shop = String(data.shop_name || '不明');
@@ -128,10 +128,12 @@ function saveReceipt_(data) {
   }
 
   var receiptId = String(data.receipt_id || Utilities.getUuid());
-  var createdAt = data.timestamp || new Date().toISOString();
+  // 保存日時は GAS 側の日本時間を正とする（端末タイムゾーン差を避ける）
+  var createdAt = formatNowTokyo_();
   var imageInfo = saveImageIfPresent_(data, receiptId, shop);
 
   var sheet = getSheet_();
+  var startRow = sheet.getLastRow() + 1;
   var rows = [];
   for (var j = 0; j < items.length; j++) {
     var it = items[j] || {};
@@ -148,12 +150,17 @@ function saveReceipt_(data) {
       imageInfo.viewUrl || ''
     ]);
   }
-  sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, HEADERS.length).setValues(rows);
+  sheet.getRange(startRow, 1, rows.length, HEADERS.length).setValues(rows);
+  // 日付列を文字列として固定（Sheets の自動 Date 変換で表示が壊れるのを防止）
+  sheet.getRange(startRow, 1, rows.length, 1).setNumberFormat('@');
+  sheet.getRange(startRow, 3, rows.length, 1).setNumberFormat('@');
 
   return {
     status: 'success',
     receipt_id: receiptId,
     rows: rows.length,
+    created_at: createdAt,
+    date: dateStr,
     image_file_id: imageInfo.fileId || '',
     image_view_url: imageInfo.viewUrl || '',
     spreadsheetUrl: getSpreadsheet_().getUrl()
@@ -172,12 +179,16 @@ function listReceipts_(month, limit) {
     var row = values[i];
     var rid = String(row[1] || '');
     if (!rid) continue;
-    var dateStr = String(row[2] || '');
-    if (month && dateStr.indexOf(month) !== 0) continue;
+    var dateStr = normalizeDateCell_(row[2]);
+    var createdAt = normalizeDateTimeCell_(row[0]);
+    if (month) {
+      var key = monthKey_(dateStr) || monthKey_(createdAt);
+      if (key !== String(month)) continue;
+    }
     if (!map[rid]) {
       map[rid] = {
         receipt_id: rid,
-        created_at: String(row[0] || ''),
+        created_at: createdAt,
         date: dateStr,
         shop_name: String(row[3] || ''),
         total_amount: Number(row[4] || 0),
@@ -274,8 +285,8 @@ function getReceipt_(receiptId) {
     if (!meta) {
       meta = {
         receipt_id: receiptId,
-        created_at: String(row[0] || ''),
-        date: String(row[2] || ''),
+        created_at: normalizeDateTimeCell_(row[0]),
+        date: normalizeDateCell_(row[2]),
         shop_name: String(row[3] || ''),
         total_amount: Number(row[4] || 0),
         image_file_id: String(row[8] || ''),
@@ -488,4 +499,84 @@ function safeRaw_(e) {
     if (e && e.parameter) return JSON.stringify(e.parameter).slice(0, 500);
   } catch (_) {}
   return '(none)';
+}
+
+function formatNowTokyo_() {
+  return Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy/MM/dd HH:mm:ss');
+}
+
+function isDateObject_(v) {
+  return Object.prototype.toString.call(v) === '[object Date]' && !isNaN(v.getTime());
+}
+
+/** レシート日 → yyyy/MM/dd（時刻があれば yyyy/MM/dd HH:mm:ss） */
+function normalizeDateCell_(value) {
+  if (isDateObject_(value)) {
+    var hasTime = value.getHours() || value.getMinutes() || value.getSeconds();
+    return Utilities.formatDate(
+      value,
+      'Asia/Tokyo',
+      hasTime ? 'yyyy/MM/dd HH:mm:ss' : 'yyyy/MM/dd'
+    );
+  }
+  var s = String(value == null ? '' : value).trim();
+  if (!s) return '';
+  var m = s.match(
+    /(\d{4})[\/\-年.](\d{1,2})[\/\-月.](\d{1,2})(?:[ T日]\s*(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/
+  );
+  if (m) {
+    var out = m[1] + '/' + pad2_(m[2]) + '/' + pad2_(m[3]);
+    if (m[4] != null) {
+      out += ' ' + pad2_(m[4]) + ':' + pad2_(m[5]) + ':' + pad2_(m[6] || '0');
+    }
+    return out;
+  }
+  var d = new Date(s);
+  if (!isNaN(d.getTime())) {
+    var ht = d.getHours() || d.getMinutes() || d.getSeconds();
+    return Utilities.formatDate(
+      d,
+      'Asia/Tokyo',
+      ht ? 'yyyy/MM/dd HH:mm:ss' : 'yyyy/MM/dd'
+    );
+  }
+  return s;
+}
+
+/** 保存日時など → yyyy/MM/dd HH:mm:ss */
+function normalizeDateTimeCell_(value) {
+  if (isDateObject_(value)) {
+    return Utilities.formatDate(value, 'Asia/Tokyo', 'yyyy/MM/dd HH:mm:ss');
+  }
+  var s = String(value == null ? '' : value).trim();
+  if (!s) return '';
+  var m = s.match(
+    /(\d{4})[\/\-年.](\d{1,2})[\/\-月.](\d{1,2})(?:[ T日](\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/
+  );
+  if (m) {
+    var out = m[1] + '/' + pad2_(m[2]) + '/' + pad2_(m[3]);
+    if (m[4] != null) {
+      out += ' ' + pad2_(m[4]) + ':' + pad2_(m[5]) + ':' + pad2_(m[6] || '0');
+    } else {
+      out += ' 00:00:00';
+    }
+    return out;
+  }
+  var d = new Date(s);
+  if (!isNaN(d.getTime())) {
+    return Utilities.formatDate(d, 'Asia/Tokyo', 'yyyy/MM/dd HH:mm:ss');
+  }
+  return s;
+}
+
+function monthKey_(dateStr) {
+  var s = String(dateStr || '');
+  var m = s.match(/(\d{4})[\/\-](\d{1,2})/);
+  if (!m) return '';
+  return m[1] + '-' + pad2_(m[2]);
+}
+
+function pad2_(n) {
+  var s = String(n);
+  return s.length < 2 ? '0' + s : s;
 }

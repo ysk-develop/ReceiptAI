@@ -48,8 +48,83 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+function pad2(n) {
+  return String(n).padStart(2, '0');
+}
+
+/** 端末ローカル（日本想定）の今日 yyyy-MM-dd（input[type=date] 用） */
 function todayStr() {
-  return new Date().toISOString().slice(0, 10);
+  const d = new Date();
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+/** 保存用のレシート日時（編集で日付だけ変えた場合は日付のみ） */
+function receiptDateForSave() {
+  const input = $('receiptDate').value || todayStr();
+  const stashed = analyzedReceipts[currentReceiptIndex]?.date;
+  if (stashed) {
+    const stashedDay = toDateInputValue(stashed);
+    if (stashedDay === input && /\d{1,2}:\d{2}/.test(String(stashed))) {
+      return formatDateTimeDisplay(stashed);
+    }
+  }
+  const m = input.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return m ? `${m[1]}/${m[2]}/${m[3]}` : input;
+}
+
+/** 履歴表示用 yyyy/mm/dd hh:mm:ss */
+function formatDateTimeDisplay(value) {
+  const d = parseToDate(value);
+  if (!d) return value ? String(value) : '';
+  return (
+    `${d.getFullYear()}/${pad2(d.getMonth() + 1)}/${pad2(d.getDate())} ` +
+    `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`
+  );
+}
+
+/** 日付のみ表示 yyyy/mm/dd */
+function formatDateDisplay(value) {
+  const d = parseToDate(value);
+  if (!d) return value ? String(value) : '';
+  return `${d.getFullYear()}/${pad2(d.getMonth() + 1)}/${pad2(d.getDate())}`;
+}
+
+/** input[type=date] 用 yyyy-MM-dd */
+function toDateInputValue(value) {
+  const d = parseToDate(value);
+  if (!d) {
+    const s = String(value || '').trim();
+    const m = s.match(/(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
+    if (m) return `${m[1]}-${pad2(m[2])}-${pad2(m[3])}`;
+    return todayStr();
+  }
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+function parseToDate(value) {
+  if (value == null || value === '') return null;
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value;
+  const s = String(value).trim();
+  if (!s) return null;
+
+  let m = s.match(
+    /^(\d{4})[\/\-年.](\d{1,2})[\/\-月.](\d{1,2})(?:[ T日]\s*(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/
+  );
+  if (m) {
+    return new Date(
+      Number(m[1]),
+      Number(m[2]) - 1,
+      Number(m[3]),
+      Number(m[4] || 0),
+      Number(m[5] || 0),
+      Number(m[6] || 0)
+    );
+  }
+
+  // ISO / "Sat Sep 19 2026 00:00:00 GMT+0900"
+  const d = new Date(s);
+  if (!Number.isNaN(d.getTime())) return d;
+  return null;
 }
 
 function initTabs() {
@@ -515,7 +590,7 @@ function showReceiptAt(index) {
   currentReceiptIndex = Math.max(0, Math.min(index, analyzedReceipts.length - 1));
   const r = analyzedReceipts[currentReceiptIndex];
   const shop = r.shop_name || '';
-  const dateVal = r.date && /^\d{4}-\d{2}-\d{2}$/.test(r.date) ? r.date : todayStr();
+  const dateVal = toDateInputValue(r.date);
   const items = r.items || [];
 
   $('shopName').value = shop;
@@ -570,7 +645,7 @@ function stashCurrentReceiptEdits() {
   analyzedReceipts[currentReceiptIndex] = {
     ...analyzedReceipts[currentReceiptIndex],
     shop_name: $('shopName').value.trim() || '不明',
-    date: $('receiptDate').value || todayStr(),
+    date: receiptDateForSave(),
     items,
     // keep printed total as reference; working total is converted
     total_amount: analyzedReceipts[currentReceiptIndex].total_amount,
@@ -715,7 +790,7 @@ async function handleSend() {
   const payload = {
     timestamp: new Date().toISOString(),
     shop_name: $('shopName').value.trim() || '不明',
-    date: $('receiptDate').value || todayStr(),
+    date: receiptDateForSave(),
     total_amount: totalAmount,
     items: itemsSave
   };
@@ -839,7 +914,7 @@ async function handleRefreshHistory() {
       card.className = 'history-card';
       card.innerHTML = `
         <h3>${escapeHtml(r.shop_name || '不明')}</h3>
-        <div class="history-meta">${escapeHtml(r.date)} / ${Number(r.total_amount || 0).toLocaleString()} 円 / ${r.item_count || 0}品目</div>
+        <div class="history-meta">保存 ${escapeHtml(formatDateTimeDisplay(r.created_at || r.date))} ／ レシート ${escapeHtml(/\d{1,2}:\d{2}/.test(String(r.date || '')) ? formatDateTimeDisplay(r.date) : formatDateDisplay(r.date))} ／ ${Number(r.total_amount || 0).toLocaleString()} 円 ／ ${r.item_count || 0}品目</div>
         <div class="btn-row">
           <button type="button" class="btn btn-secondary btn-detail">明細</button>
           <button type="button" class="btn btn-primary btn-image" ${r.image_file_id ? '' : 'disabled'}>画像を表示</button>
@@ -868,7 +943,7 @@ async function handleRefreshHistory() {
         openImageModal(r.image_view_url, r.image_file_id);
       });
       card.querySelector('.btn-delete').addEventListener('click', async () => {
-        const label = `${r.shop_name || '不明'} / ${r.date || ''} / ${Number(r.total_amount || 0).toLocaleString()} 円`;
+        const label = `${r.shop_name || '不明'} / ${formatDateTimeDisplay(r.created_at || r.date)} / ${Number(r.total_amount || 0).toLocaleString()} 円`;
         if (!confirm(`このレシートを完全に削除しますか？\n（スプレッドシートから物理削除。他レシートが使っていなければ画像も削除）\n\n${label}`)) {
           return;
         }

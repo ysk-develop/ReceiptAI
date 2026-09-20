@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
+import base64
 import sys
 from datetime import date
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QThread, QUrl, pyqtSignal
-from PyQt6.QtGui import QDesktopServices
+from PyQt6.QtGui import QDesktopServices, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDialog,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -21,6 +23,7 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QStatusBar,
     QTabWidget,
@@ -823,6 +826,41 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "接続失敗", str(exc))
 
     def show_receipt_image(self, view_url: str, file_id: str) -> None:
+        gas_url = self.cfg.get("gas_url") or self.gas_edit.text().strip()
+        if file_id and gas_url:
+            try:
+                data = gas_client.get_image(gas_url, file_id)
+                raw = base64.b64decode(data["data_base64"])
+                pix = QPixmap()
+                if not pix.loadFromData(raw):
+                    raise RuntimeError("画像のデコードに失敗しました")
+                dlg = QDialog(self)
+                dlg.setWindowTitle(str(data.get("name") or "レシート画像"))
+                dlg.resize(min(720, pix.width() + 40), min(900, pix.height() + 40))
+                lay = QVBoxLayout(dlg)
+                scroll = QScrollArea()
+                scroll.setWidgetResizable(True)
+                label = QLabel()
+                label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                label.setPixmap(
+                    pix.scaled(
+                        680,
+                        860,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                )
+                scroll.setWidget(label)
+                lay.addWidget(scroll)
+                close_btn = _btn("閉じる", "SecondaryButton")
+                close_btn.clicked.connect(dlg.accept)
+                lay.addWidget(close_btn)
+                dlg.exec()
+                return
+            except Exception as exc:  # noqa: BLE001
+                QMessageBox.critical(self, "画像", str(exc))
+                return
+
         url = view_url or (f"https://drive.google.com/uc?export=view&id={file_id}" if file_id else "")
         if not url:
             QMessageBox.information(self, "画像", "画像がありません")

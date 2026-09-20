@@ -60,7 +60,7 @@ function doGet(e) {
     } else if (action === 'receipt') {
       result = getReceipt_(p.id || '');
     } else if (action === 'image') {
-      result = getImageMeta_(p.id || '');
+      result = getImageMeta_(p.id || '', p.data === '1' || p.data === 'true');
     } else {
       result = { status: 'error', message: 'unknown action' };
     }
@@ -232,17 +232,28 @@ function getReceipt_(receiptId) {
   return meta;
 }
 
-function getImageMeta_(fileId) {
+function getImageMeta_(fileId, includeData) {
   if (!fileId) throw new Error('image id が空です');
   var file = DriveApp.getFileById(fileId);
-  return {
+  var blob = file.getBlob();
+  var mime = blob.getContentType() || file.getMimeType() || 'image/jpeg';
+  var result = {
     status: 'ok',
     file_id: fileId,
     name: file.getName(),
-    mime: file.getMimeType(),
-    view_url: 'https://drive.google.com/uc?export=view&id=' + fileId,
-    download_url: file.getDownloadUrl()
+    mime: mime,
+    // Drive直リンクはブラウザの <img> で失敗しやすい。表示は data=1 で本体取得を推奨
+    view_url: 'https://drive.google.com/uc?export=view&id=' + fileId
   };
+  if (includeData) {
+    // 1280px JPEG 想定。極端に大きい場合は拒否してタイムアウト防止
+    var bytes = blob.getBytes();
+    if (bytes.length > 4 * 1024 * 1024) {
+      throw new Error('画像が大きすぎます（4MB超）。再撮影または再保存してください。');
+    }
+    result.data_base64 = Utilities.base64Encode(bytes);
+  }
+  return result;
 }
 
 function saveImageIfPresent_(data, receiptId, shop) {
@@ -260,8 +271,10 @@ function saveImageIfPresent_(data, receiptId, shop) {
   var bytes = Utilities.base64Decode(b64);
   var blob = Utilities.newBlob(bytes, mime, buildImageName_(receiptId, shop));
   var file = getImagesFolder_().createFile(blob);
-  // リンクを知っている人は閲覧可（imgタグ表示用）。ファイルIDは推測困難
-  file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  // 可能ならリンク共有も付けるが、表示は GAS action=image&data=1 が本線
+  try {
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  } catch (_) {}
   var viewUrl = 'https://drive.google.com/uc?export=view&id=' + file.getId();
   return { fileId: file.getId(), viewUrl: viewUrl };
 }

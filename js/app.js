@@ -5,7 +5,7 @@ import {
 import { CATEGORIES, normalizeCategory } from './categories.js';
 import {
   fetchModels, analyzeReceipt, sendToGas, pingGas,
-  listReceipts, getReceipt
+  listReceipts, getReceipt, fetchReceiptImage
 } from './gemini-api.js';
 import { resizeImageFile } from './image-util.js';
 import {
@@ -810,7 +810,7 @@ async function handleRefreshHistory() {
         <div class="history-meta">${escapeHtml(r.date)} / ${Number(r.total_amount || 0).toLocaleString()} 円 / ${r.item_count || 0}品目</div>
         <div class="btn-row">
           <button type="button" class="btn btn-secondary btn-detail">明細</button>
-          <button type="button" class="btn btn-primary btn-image" ${r.image_file_id || r.image_view_url ? '' : 'disabled'}>画像を表示</button>
+          <button type="button" class="btn btn-primary btn-image" ${r.image_file_id ? '' : 'disabled'}>画像を表示</button>
         </div>
         <div class="history-detail hidden"></div>
       `;
@@ -849,20 +849,33 @@ async function handleRefreshHistory() {
   }
 }
 
-function openImageModal(viewUrl, fileId) {
-  const url = viewUrl || (fileId ? `https://drive.google.com/uc?export=view&id=${fileId}` : '');
-  if (!url) {
-    alert('画像がありません');
-    return;
-  }
-  $('modalImg').src = url;
-  $('modalImgHint').textContent = '表示されない場合は Drive の共有設定、または GAS 再デプロイを確認してください。';
+async function openImageModal(viewUrl, fileId) {
   show($('imageModal'));
+  $('modalImg').removeAttribute('src');
+  $('modalImgHint').textContent = '画像を読み込み中…';
+
+  const gasUrl = ($('gasUrlInput')?.value || '').trim() || getGasUrl();
+  try {
+    if (fileId && gasUrl) {
+      const img = await fetchReceiptImage(gasUrl, fileId);
+      $('modalImg').src = `data:${img.mime};base64,${img.base64}`;
+      $('modalImgHint').textContent = '';
+      return;
+    }
+    const url = viewUrl || '';
+    if (!url) throw new Error('画像がありません（保存時に写真が付いていない可能性があります）');
+    $('modalImg').src = url;
+    $('modalImgHint').textContent =
+      'Drive直リンク表示です。表示されない場合は GAS を最新に更新し、新バージョンで再デプロイしてください。';
+  } catch (err) {
+    $('modalImgHint').textContent = `画像を表示できません: ${err.message}`;
+  }
 }
 
 function closeImageModal() {
   hide($('imageModal'));
-  $('modalImg').src = '';
+  $('modalImg').removeAttribute('src');
+  $('modalImgHint').textContent = '';
 }
 
 async function handleFetchModels() {

@@ -69,6 +69,15 @@ def get_receipt(gas_url: str, receipt_id: str) -> dict[str, Any]:
     return data
 
 
+def get_image(gas_url: str, file_id: str) -> dict[str, Any]:
+    data = _get(gas_url, {"action": "image", "id": file_id, "data": "1"}, timeout=180)
+    if data.get("status") != "ok":
+        raise RuntimeError(data.get("message") or "image failed")
+    if not data.get("data_base64"):
+        raise RuntimeError("画像データが空です")
+    return data
+
+
 def save_receipt(gas_url: str, payload: dict[str, Any]) -> dict[str, Any]:
     body = {"action": "save", **payload}
     data = _post(gas_url, body)

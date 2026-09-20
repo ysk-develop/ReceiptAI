@@ -342,6 +342,23 @@ export async function getReceipt(gasUrl, receiptId) {
   return data;
 }
 
+/** Fetch receipt image bytes via GAS (avoids broken Drive hotlink in <img>). */
+export async function fetchReceiptImage(gasUrl, fileId) {
+  if (!fileId) throw new Error('画像IDがありません');
+  const data = await gasJsonp(
+    gasUrl,
+    { action: 'image', id: fileId, data: '1' },
+    120000
+  );
+  if (data.status !== 'ok') throw new Error(data.message || '画像取得失敗');
+  if (!data.data_base64) throw new Error('画像データが空です');
+  return {
+    mime: data.mime || 'image/jpeg',
+    base64: data.data_base64,
+    name: data.name || ''
+  };
+}
+
 /**
  * Save receipt (+ optional resized image) to spreadsheet via GAS.
  */

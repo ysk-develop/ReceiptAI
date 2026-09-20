@@ -257,6 +257,16 @@ function getImageMeta_(fileId, includeData) {
 }
 
 function saveImageIfPresent_(data, receiptId, shop) {
+  // 同一写真の複数レシート用: 既に上げた画像IDを再利用
+  var existingId = String(data.image_file_id || data.imageFileId || '').trim();
+  var existingUrl = String(data.image_view_url || data.imageViewUrl || '').trim();
+  if (existingId) {
+    if (!existingUrl) {
+      existingUrl = 'https://drive.google.com/uc?export=view&id=' + existingId;
+    }
+    return { fileId: existingId, viewUrl: existingUrl };
+  }
+
   var b64 = data.image_base64 || data.imageBase64 || '';
   if (!b64) return { fileId: '', viewUrl: '' };
 

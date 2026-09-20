@@ -17,6 +17,8 @@ let imageData = null;
 let imageMime = 'image/jpeg';
 /** Resized JPEG for Drive upload (may equal imageData) */
 let uploadImageBase64 = null;
+/** Shared Drive image after first upload in a multi-receipt batch */
+let sharedUploadImage = null;
 /** @type {Array<{shop_name:string,date:string,total_amount:number,items:Array}>} */
 let analyzedReceipts = [];
 let currentReceiptIndex = 0;
@@ -138,6 +140,7 @@ function initImageInput() {
       imageData = resized.base64;
       imageMime = resized.mime;
       uploadImageBase64 = resized.base64;
+      sharedUploadImage = null;
       $('previewImg').src = resized.dataUrl;
       show($('imagePreview'));
       $('imageStatus').textContent =
@@ -146,6 +149,7 @@ function initImageInput() {
       showMessage(`画像の読み込みに失敗: ${err.message}`);
       imageData = null;
       uploadImageBase64 = null;
+      sharedUploadImage = null;
     }
   });
 }
@@ -587,6 +591,7 @@ function goNextReceipt() {
 function handleClear() {
   imageData = null;
   uploadImageBase64 = null;
+  sharedUploadImage = null;
   imageMime = 'image/jpeg';
   analyzedReceipts = [];
   currentReceiptIndex = 0;
@@ -672,13 +677,26 @@ function handleManualEdit() {
   showMessage('手入力モードを開きました', 'success');
 }
 
-async function saveOnePayload(gasUrl, payload, attachImage) {
+async function saveOnePayload(gasUrl, payload, { uploadFresh = false, reuseImage = null } = {}) {
   const body = { ...payload };
-  if (attachImage && uploadImageBase64) {
+  if (uploadFresh && uploadImageBase64) {
     body.image_base64 = uploadImageBase64;
     body.image_mime = 'image/jpeg';
+  } else if (reuseImage?.fileId) {
+    body.image_file_id = reuseImage.fileId;
+    body.image_view_url = reuseImage.viewUrl || '';
   }
   return sendToGas(gasUrl, body);
+}
+
+function rememberSharedImage(saveResult) {
+  const data = saveResult?.result;
+  const fileId = data?.image_file_id || '';
+  if (!fileId) return;
+  sharedUploadImage = {
+    fileId,
+    viewUrl: data.image_view_url || ''
+  };
 }
 
 async function handleSend() {
@@ -705,11 +723,15 @@ async function handleSend() {
   $('sendBtn').disabled = true;
   $('sendBtn').textContent = '送信中...';
   try {
-    // Attach image only to the first receipt save in a multi set, once
-    const attachImage = Boolean(uploadImageBase64) && currentReceiptIndex === 0;
-    const result = await saveOnePayload(gasUrl, payload, attachImage || analyzedReceipts.length <= 1);
+    // 同一写真の複数レシート: 最初の1回だけアップロードし、以降は同じ画像IDを付与
+    const uploadFresh = Boolean(uploadImageBase64) && !sharedUploadImage;
+    const result = await saveOnePayload(gasUrl, payload, {
+      uploadFresh,
+      reuseImage: sharedUploadImage
+    });
     setGasUrl(gasUrl);
     if (result.verified) {
+      rememberSharedImage(result);
       showMessage('このレシートを保存しました', 'success');
       if (analyzedReceipts.length > 1) {
         analyzedReceipts.splice(currentReceiptIndex, 1);
@@ -773,7 +795,17 @@ async function handleSendAll() {
         items: itemsSave
       };
       try {
-        await saveOnePayload(gasUrl, payload, i === 0 && Boolean(uploadImageBase64));
+        const uploadFresh = Boolean(uploadImageBase64) && !sharedUploadImage;
+        const result = await saveOnePayload(gasUrl, payload, {
+          uploadFresh,
+          reuseImage: sharedUploadImage
+        });
+        if (result.verified) {
+          rememberSharedImage(result);
+        } else if (uploadFresh) {
+          // 初回が未確認なら、残りも画像本体を送る（Drive上は重複しうる）
+          sharedUploadImage = null;
+        }
         ok += 1;
       } catch {
         fail += 1;

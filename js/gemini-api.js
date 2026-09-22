@@ -21,7 +21,8 @@ export async function fetchModels(apiKey) {
       name: m.displayName || m.name.replace('models/', ''),
       description: m.description || ''
     }))
-    .filter((m) => /gemini/i.test(m.id));
+    // Gemini API 上の gemini-* / gemma-* を表示（embedding 等は除外）
+    .filter((m) => /^(gemini|gemma)/i.test(m.id));
 }
 
 /**

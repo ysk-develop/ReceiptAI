@@ -157,7 +157,7 @@ def fetch_models(api_key: str) -> list[dict[str, str]]:
         if "generateContent" not in methods:
             continue
         mid = name.replace("models/", "")
-        if "gemini" not in mid.lower():
+        if "gemini" not in mid.lower() and "gemma" not in mid.lower():
             continue
         models.append({"id": mid, "name": m.get("displayName") or mid})
     return models

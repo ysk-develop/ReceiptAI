@@ -14,7 +14,7 @@
 <body>
   <header class="header">
     <h1>🧾 レシート自動仕分け</h1>
-    <p class="app-version" id="appVersion">v23</p>
+    <p class="app-version" id="appVersion">v24</p>
   </header>
 
   <nav class="tabs" role="tablist">
@@ -66,19 +66,19 @@
 
         <div class="card">
           <h2>内容確認・修正</h2>
-          <div class="form-grid">
-            <div class="form-row">
-              <label for="shopNameDisplay">店舗名</label>
-              <button type="button" id="shopNameDisplay" class="field-tap form-control" aria-label="店舗名を編集">店舗名を入力</button>
-              <input type="hidden" id="shopName" value="">
-            </div>
-            <div class="form-row">
-              <label for="receiptDate">日付</label>
-              <input type="date" id="receiptDate" class="form-control">
-            </div>
+          <div class="meta-line">
+            <span class="meta-line-label">店舗</span>
+            <button type="button" id="shopNameDisplay" class="meta-line-value" aria-label="店舗名を編集">店舗名を入力</button>
+            <input type="hidden" id="shopName" value="">
+            <button type="button" class="btn btn-secondary btn-sm meta-line-edit" id="editShopBtn">修正</button>
+          </div>
+          <div class="meta-line">
+            <span class="meta-line-label">日付</span>
+            <button type="button" id="receiptDateDisplay" class="meta-line-value" aria-label="日付を編集">—</button>
+            <input type="hidden" id="receiptDate" value="">
+            <button type="button" class="btn btn-secondary btn-sm meta-line-edit" id="editDateBtn">修正</button>
           </div>
 
-          <p class="hint" style="margin-top:0.75rem">品目名をタップまたは「修正」で詳細を編集できます。</p>
           <div id="itemList"></div>
           <button id="addItemBtn" class="btn btn-secondary btn-sm">+ 明細行を追加</button>
 
@@ -208,7 +208,7 @@
         <div class="settings-section-body">
           <p class="about-text">解析結果は選択中の帳簿の Google スプレッドシートに保存され、画像は各帳簿フォルダの images に保管されます。履歴タブで同期表示できます。</p>
           <p class="about-text">APIキー・GAS URL・選択中の帳簿は各端末の localStorage にのみ保存されます。</p>
-          <p class="about-text">アプリバージョン: <strong id="aboutVersion">v23</strong>（この数字が上がっていれば最新のデプロイが届いています）</p>
+          <p class="about-text">アプリバージョン: <strong id="aboutVersion">v24</strong>（この数字が上がっていれば最新のデプロイが届いています）</p>
         </div>
       </details>
     </section>
@@ -236,6 +236,7 @@
       <label class="hint" id="fieldModalLabel" for="fieldModalInput"></label>
       <textarea id="fieldModalText" class="field-modal-input hidden" rows="4"></textarea>
       <input id="fieldModalNumber" class="field-modal-input hidden" type="number" inputmode="numeric">
+      <input id="fieldModalDate" class="field-modal-input hidden" type="date">
       <div class="btn-row" style="margin-top:12px">
         <button type="button" class="btn btn-primary" id="fieldModalOk">確定</button>
       </div>

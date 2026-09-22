@@ -348,6 +348,66 @@ main {
   cursor: pointer;
 }
 
+/* Meta lines (shop / date) — same compact pattern as item lines */
+.meta-line {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.15rem;
+  margin-bottom: 0.15rem;
+  border-bottom: 1px solid #e0f2f1;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.meta-line-label {
+  flex: 0 0 2.5em;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+
+.meta-line-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  padding: 0.35rem 0.15rem;
+  border: none;
+  background: transparent;
+  color: var(--primary);
+  font-size: 0.85rem;
+  font-weight: 600;
+  font-family: inherit;
+  line-height: 1.3;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.meta-line-value[data-empty="1"] {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.meta-line .meta-line-edit,
+.meta-line .btn-sm {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: auto;
+  margin: 0;
+  padding: 0.35rem 0.55rem;
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
 /* Compact item list: name (ellipsis) + 修正 + ✕ */
 .item-line {
   display: flex;

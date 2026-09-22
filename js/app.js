@@ -422,6 +422,25 @@ function syncShopNameDisplay() {
   const v = (input.value || '').trim();
   btn.textContent = v || '店舗名を入力';
   btn.dataset.empty = v ? '0' : '1';
+  btn.title = v || '店舗名を入力';
+}
+
+function formatDateLabel(isoDay) {
+  const s = String(isoDay || '').trim();
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return `${m[1]}/${m[2]}/${m[3]}`;
+  return s || '—';
+}
+
+function syncDateDisplay() {
+  const btn = $('receiptDateDisplay');
+  const input = $('receiptDate');
+  if (!btn || !input) return;
+  const v = (input.value || '').trim() || todayStr();
+  if (!input.value) input.value = v;
+  btn.textContent = formatDateLabel(v);
+  btn.dataset.empty = '0';
+  btn.title = formatDateLabel(v);
 }
 
 async function editShopName() {
@@ -436,21 +455,40 @@ async function editShopName() {
   syncShopNameDisplay();
 }
 
+async function editReceiptDate() {
+  const next = await openFieldModal({
+    title: '日付の編集',
+    label: 'レシート日付',
+    mode: 'date',
+    value: $('receiptDate').value || todayStr()
+  });
+  if (next === null) return;
+  const day = toDateInputValue(next) || todayStr();
+  $('receiptDate').value = day;
+  syncDateDisplay();
+}
+
 function openFieldModal({ title, label, mode, value }) {
   return new Promise((resolve) => {
     const modal = $('fieldModal');
     const textEl = $('fieldModalText');
     const numEl = $('fieldModalNumber');
+    const dateEl = $('fieldModalDate');
     $('fieldModalTitle').textContent = title;
     $('fieldModalLabel').textContent = label || '';
 
     hide(textEl);
     hide(numEl);
+    if (dateEl) hide(dateEl);
     let active;
     if (mode === 'text') {
       show(textEl);
       textEl.value = value ?? '';
       active = textEl;
+    } else if (mode === 'date') {
+      show(dateEl);
+      dateEl.value = toDateInputValue(value) || todayStr();
+      active = dateEl;
     } else {
       show(numEl);
       numEl.value = value === '' || value == null ? '' : String(value);
@@ -461,7 +499,7 @@ function openFieldModal({ title, label, mode, value }) {
     setTimeout(() => {
       active.focus();
       if (mode === 'text') textEl.setSelectionRange(textEl.value.length, textEl.value.length);
-      else numEl.select();
+      else if (mode === 'number') numEl.select();
     }, 50);
 
     const finish = (result) => {
@@ -470,16 +508,18 @@ function openFieldModal({ title, label, mode, value }) {
       $('fieldModalBackdrop').onclick = null;
       textEl.onkeydown = null;
       numEl.onkeydown = null;
+      if (dateEl) dateEl.onkeydown = null;
       hide(modal);
       resolve(result);
     };
 
     const confirm = () => {
       if (mode === 'text') finish(textEl.value);
+      else if (mode === 'date') finish(dateEl.value || '');
       else finish(numEl.value === '' ? '' : Number(numEl.value));
     };
     const onKey = (e) => {
-      if (e.key === 'Enter' && (mode === 'number' || !e.shiftKey)) {
+      if (e.key === 'Enter' && (mode === 'number' || mode === 'date' || !e.shiftKey)) {
         e.preventDefault();
         confirm();
       } else if (e.key === 'Escape') {
@@ -489,6 +529,7 @@ function openFieldModal({ title, label, mode, value }) {
     };
     textEl.onkeydown = onKey;
     numEl.onkeydown = onKey;
+    if (dateEl) dateEl.onkeydown = onKey;
 
     $('fieldModalOk').onclick = confirm;
     $('fieldModalCancel').onclick = () => finish(null);
@@ -781,6 +822,7 @@ function showReceiptAt(index) {
   $('shopName').value = shop;
   syncShopNameDisplay();
   $('receiptDate').value = dateVal;
+  syncDateDisplay();
   renderItems(items);
 
   const { exclSum, inclSum } = calcTotal();
@@ -869,6 +911,7 @@ function handleClear() {
   $('shopName').value = '';
   syncShopNameDisplay();
   $('receiptDate').value = todayStr();
+  syncDateDisplay();
   calcTotal();
 }
 
@@ -1370,6 +1413,7 @@ function init() {
   applyAppVersion();
   $('receiptDate').value = todayStr();
   syncShopNameDisplay();
+  syncDateDisplay();
   initTabs();
   initSettings();
   initImageInput();
@@ -1388,6 +1432,9 @@ function init() {
   $('fetchModelsBtn').addEventListener('click', handleFetchModels);
   $('refreshHistoryBtn').addEventListener('click', handleRefreshHistory);
   $('shopNameDisplay').addEventListener('click', editShopName);
+  $('editShopBtn')?.addEventListener('click', editShopName);
+  $('receiptDateDisplay')?.addEventListener('click', editReceiptDate);
+  $('editDateBtn')?.addEventListener('click', editReceiptDate);
   $('deleteApiKeyBtn').addEventListener('click', () => {
     if (!confirm('APIキーをこの端末から削除しますか？')) return;
     setApiKey('');

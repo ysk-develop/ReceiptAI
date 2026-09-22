@@ -1540,8 +1540,59 @@ function initGasActions() {
 }
 
 function registerServiceWorker() {
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('./service-worker.js').catch(() => {});
+  if (!('serviceWorker' in navigator)) return;
+  navigator.serviceWorker.register('./service-worker.js')
+    .then((reg) => {
+      const check = () => reg.update().catch(() => {});
+      check();
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') check();
+      });
+    })
+    .catch(() => {});
+}
+
+/** Clear SW caches and hard-reload so PWA picks up the latest GitHub Pages deploy. */
+async function forceAppUpdate() {
+  const status = $('forceUpdateStatus');
+  const btn = $('forceUpdateBtn');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '更新中…';
+  }
+  if (status) status.textContent = 'キャッシュと Service Worker をクリアしています…';
+
+  try {
+    if ('caches' in window) {
+      const keys = await caches.keys();
+      await Promise.all(keys.map((k) => caches.delete(k)));
+    }
+    if ('serviceWorker' in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map((r) => r.unregister()));
+    }
+    if (status) status.textContent = '最新版を読み込みます…';
+    const url = new URL(location.href);
+    url.searchParams.set('_reload', String(Date.now()));
+    location.replace(url.toString());
+  } catch (err) {
+    if (status) status.textContent = `更新に失敗しました: ${err.message || err}`;
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '最新版を読み込み';
+    }
+    showMessage(`更新エラー: ${err.message || err}`);
+  }
+}
+
+function cleanReloadQueryParam() {
+  try {
+    const url = new URL(location.href);
+    if (!url.searchParams.has('_reload')) return;
+    url.searchParams.delete('_reload');
+    history.replaceState(null, '', url.pathname + url.search + url.hash);
+  } catch {
+    /* ignore */
   }
 }
 
@@ -1554,6 +1605,7 @@ function applyAppVersion() {
 }
 
 function init() {
+  cleanReloadQueryParam();
   applyAppVersion();
   $('receiptDate').value = todayStr();
   syncShopNameDisplay();
@@ -1584,6 +1636,7 @@ function init() {
   $('editDateBtn')?.addEventListener('click', editReceiptDate);
   $('paymentDisplay')?.addEventListener('click', editPaymentMethod);
   $('editPaymentBtn')?.addEventListener('click', editPaymentMethod);
+  $('forceUpdateBtn')?.addEventListener('click', forceAppUpdate);
   $('deleteApiKeyBtn').addEventListener('click', () => {
     if (!confirm('APIキーをこの端末から削除しますか？')) return;
     setApiKey('');

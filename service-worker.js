@@ -1,5 +1,5 @@
 // Keep APP_VERSION in sync with js/version.js
-const APP_VERSION = '26';
+const APP_VERSION = '27';
 const CACHE_NAME = `receipt-ai-v${APP_VERSION}`;
 const ASSETS = [
   './',
@@ -28,24 +28,74 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) =>
       Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
-    )
+    ).then(() => self.clients.claim())
   );
-  self.clients.claim();
 });
 
-self.addEventListener('fetch', (event) => {
-  event.respondWith(
-    caches.match(event.request).then((cached) => {
-      if (cached) return cached;
-      return fetch(event.request)
-        .then((res) => {
-          const clone = res.clone();
-          if (event.request.method === 'GET' && res.ok) {
-            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
-          }
-          return res;
-        })
-        .catch(() => cached);
-    })
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
+});
+
+function isNavigationRequest(request) {
+  return request.mode === 'navigate' ||
+    (request.method === 'GET' && request.headers.get('accept')?.includes('text/html'));
+}
+
+function isVersionCritical(url) {
+  const path = url.pathname || '';
+  return (
+    path.endsWith('/') ||
+    path.endsWith('/index.html') ||
+    path.endsWith('/service-worker.js') ||
+    path.endsWith('/js/version.js') ||
+    path.endsWith('/manifest.json')
   );
+}
+
+async function networkFirst(request) {
+  try {
+    const res = await fetch(request);
+    if (res && res.ok && request.method === 'GET') {
+      const clone = res.clone();
+      caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+    }
+    return res;
+  } catch {
+    const cached = await caches.match(request);
+    if (cached) return cached;
+    throw new Error('offline');
+  }
+}
+
+async function cacheFirst(request) {
+  const cached = await caches.match(request);
+  if (cached) return cached;
+  const res = await fetch(request);
+  if (res && res.ok && request.method === 'GET') {
+    const clone = res.clone();
+    caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+  }
+  return res;
+}
+
+self.addEventListener('fetch', (event) => {
+  const req = event.request;
+  if (req.method !== 'GET') return;
+
+  let url;
+  try {
+    url = new URL(req.url);
+  } catch {
+    return;
+  }
+  if (url.origin !== self.location.origin) return;
+
+  if (isNavigationRequest(req) || isVersionCritical(url)) {
+    event.respondWith(networkFirst(req));
+    return;
+  }
+
+  event.respondWith(cacheFirst(req));
 });

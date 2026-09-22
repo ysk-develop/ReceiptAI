@@ -1,6 +1,7 @@
 import {
   getApiKey, setApiKey, getModel, setModel,
-  getModels, setModels, getGasUrl, setGasUrl, getBookId, setBookId
+  getModels, setModels, getGasUrl, setGasUrl, getBookId, setBookId,
+  getPaymentMethods, setPaymentMethods, ensurePaymentMethodInList
 } from './storage.js';
 import { CATEGORIES, normalizeCategory } from './categories.js';
 import {
@@ -468,18 +469,20 @@ async function editReceiptDate() {
   syncDateDisplay();
 }
 
-function openFieldModal({ title, label, mode, value }) {
+function openFieldModal({ title, label, mode, value, options = [] }) {
   return new Promise((resolve) => {
     const modal = $('fieldModal');
     const textEl = $('fieldModalText');
     const numEl = $('fieldModalNumber');
     const dateEl = $('fieldModalDate');
+    const selectEl = $('fieldModalSelect');
     $('fieldModalTitle').textContent = title;
     $('fieldModalLabel').textContent = label || '';
 
     hide(textEl);
     hide(numEl);
     if (dateEl) hide(dateEl);
+    if (selectEl) hide(selectEl);
     let active;
     if (mode === 'text') {
       show(textEl);
@@ -489,6 +492,22 @@ function openFieldModal({ title, label, mode, value }) {
       show(dateEl);
       dateEl.value = toDateInputValue(value) || todayStr();
       active = dateEl;
+    } else if (mode === 'select') {
+      show(selectEl);
+      const opts = options.length ? options : [String(value || '')];
+      selectEl.innerHTML = opts.map((o) => {
+        const v = String(o);
+        const sel = v === String(value) ? ' selected' : '';
+        return `<option value="${escapeHtml(v)}"${sel}>${escapeHtml(v)}</option>`;
+      }).join('');
+      if (value && ![...selectEl.options].some((o) => o.value === String(value))) {
+        const opt = document.createElement('option');
+        opt.value = String(value);
+        opt.textContent = String(value);
+        opt.selected = true;
+        selectEl.appendChild(opt);
+      }
+      active = selectEl;
     } else {
       show(numEl);
       numEl.value = value === '' || value == null ? '' : String(value);
@@ -509,6 +528,7 @@ function openFieldModal({ title, label, mode, value }) {
       textEl.onkeydown = null;
       numEl.onkeydown = null;
       if (dateEl) dateEl.onkeydown = null;
+      if (selectEl) selectEl.onkeydown = null;
       hide(modal);
       resolve(result);
     };
@@ -516,10 +536,11 @@ function openFieldModal({ title, label, mode, value }) {
     const confirm = () => {
       if (mode === 'text') finish(textEl.value);
       else if (mode === 'date') finish(dateEl.value || '');
+      else if (mode === 'select') finish(selectEl.value || '');
       else finish(numEl.value === '' ? '' : Number(numEl.value));
     };
     const onKey = (e) => {
-      if (e.key === 'Enter' && (mode === 'number' || mode === 'date' || !e.shiftKey)) {
+      if (e.key === 'Enter' && (mode === 'number' || mode === 'date' || mode === 'select' || !e.shiftKey)) {
         e.preventDefault();
         confirm();
       } else if (e.key === 'Escape') {
@@ -530,10 +551,118 @@ function openFieldModal({ title, label, mode, value }) {
     textEl.onkeydown = onKey;
     numEl.onkeydown = onKey;
     if (dateEl) dateEl.onkeydown = onKey;
+    if (selectEl) selectEl.onkeydown = onKey;
 
     $('fieldModalOk').onclick = confirm;
     $('fieldModalCancel').onclick = () => finish(null);
     $('fieldModalBackdrop').onclick = () => finish(null);
+  });
+}
+
+function syncPaymentDisplay() {
+  const btn = $('paymentDisplay');
+  const input = $('paymentMethod');
+  if (!btn || !input) return;
+  const v = (input.value || '').trim() || '現金';
+  input.value = v;
+  btn.textContent = v;
+  btn.dataset.empty = '0';
+  btn.title = v;
+}
+
+async function editPaymentMethod() {
+  ensurePaymentMethodInList($('paymentMethod').value || '現金');
+  const options = getPaymentMethods();
+  const next = await openFieldModal({
+    title: '支払い方法',
+    label: '支払い方法を選択',
+    mode: 'select',
+    value: $('paymentMethod').value || '現金',
+    options
+  });
+  if (next === null) return;
+  const name = String(next).trim() || '現金';
+  ensurePaymentMethodInList(name);
+  $('paymentMethod').value = name;
+  syncPaymentDisplay();
+  refreshPaymentMethodSelect();
+}
+
+function refreshPaymentMethodSelect() {
+  const sel = $('paymentMethodSelect');
+  if (!sel) return;
+  const list = getPaymentMethods();
+  const current = sel.value;
+  sel.innerHTML = '';
+  list.forEach((name) => {
+    const opt = document.createElement('option');
+    opt.value = name;
+    opt.textContent = name;
+    if (name === current) opt.selected = true;
+    sel.appendChild(opt);
+  });
+  if (!sel.value && list.length) sel.selectedIndex = 0;
+}
+
+function initPaymentMethodSettings() {
+  refreshPaymentMethodSelect();
+  $('addPaymentMethodBtn')?.addEventListener('click', () => {
+    const name = window.prompt('追加する支払い方法', '');
+    if (name == null) return;
+    const trimmed = name.trim();
+    if (!trimmed) {
+      showMessage('名前を入力してください');
+      return;
+    }
+    const list = getPaymentMethods();
+    if (list.includes(trimmed)) {
+      showMessage('すでに登録されています');
+      return;
+    }
+    setPaymentMethods([...list, trimmed]);
+    refreshPaymentMethodSelect();
+    $('paymentMethodSelect').value = trimmed;
+    showMessage(`「${trimmed}」を追加しました`, 'success');
+  });
+  $('renamePaymentMethodBtn')?.addEventListener('click', () => {
+    const sel = $('paymentMethodSelect');
+    const current = sel?.value || '';
+    if (!current) return;
+    const name = window.prompt('新しい名前', current);
+    if (name == null) return;
+    const trimmed = name.trim();
+    if (!trimmed) {
+      showMessage('名前を入力してください');
+      return;
+    }
+    const list = getPaymentMethods().map((x) => (x === current ? trimmed : x));
+    setPaymentMethods(list);
+    if (($('paymentMethod').value || '') === current) {
+      $('paymentMethod').value = trimmed;
+      syncPaymentDisplay();
+    }
+    refreshPaymentMethodSelect();
+    $('paymentMethodSelect').value = trimmed;
+    showMessage(`「${trimmed}」に変更しました`, 'success');
+  });
+  $('deletePaymentMethodBtn')?.addEventListener('click', () => {
+    const sel = $('paymentMethodSelect');
+    const current = sel?.value || '';
+    if (!current) return;
+    const list = getPaymentMethods();
+    if (list.length <= 1) {
+      showMessage('支払い方法は少なくとも1つ必要です');
+      return;
+    }
+    if (!window.confirm(`「${current}」を削除しますか？`)) return;
+    const next = list.filter((x) => x !== current);
+    setPaymentMethods(next);
+    if (($('paymentMethod').value || '') === current) {
+      $('paymentMethod').value = next[0];
+      syncPaymentDisplay();
+    }
+    refreshPaymentMethodSelect();
+    showMessage(`「${current}」を削除しました`, 'success');
   });
 }
 
@@ -803,9 +932,15 @@ function openEditor(parsed) {
       shop_name: '',
       date: todayStr(),
       total_amount: 0,
+      payment_method: '現金',
       items: []
     }];
   }
+  analyzedReceipts = analyzedReceipts.map((r) => {
+    const pm = (r.payment_method || '現金').trim() || '現金';
+    ensurePaymentMethodInList(pm);
+    return { ...r, payment_method: pm };
+  });
   currentReceiptIndex = 0;
   showReceiptAt(0);
   show($('resultArea'));
@@ -817,12 +952,16 @@ function showReceiptAt(index) {
   const r = analyzedReceipts[currentReceiptIndex];
   const shop = r.shop_name || '';
   const dateVal = toDateInputValue(r.date);
+  const payment = (r.payment_method || '現金').trim() || '現金';
   const items = r.items || [];
 
   $('shopName').value = shop;
   syncShopNameDisplay();
   $('receiptDate').value = dateVal;
   syncDateDisplay();
+  $('paymentMethod').value = payment;
+  ensurePaymentMethodInList(payment);
+  syncPaymentDisplay();
   renderItems(items);
 
   const { exclSum, inclSum } = calcTotal();
@@ -830,7 +969,7 @@ function showReceiptAt(index) {
   const diff = printedTotal > 0 ? printedTotal - inclSum : 0;
 
   $('detectedSummary').innerHTML =
-    `<b>検出:</b> ${escapeHtml(shop || '不明')} / ${escapeHtml(dateVal)}（${items.length}件）<br>` +
+    `<b>検出:</b> ${escapeHtml(shop || '不明')} / ${escapeHtml(dateVal)} / ${escapeHtml(payment)}（${items.length}件）<br>` +
     `<b>税抜合計:</b> ${exclSum.toLocaleString()} 円 → <b>税込換算:</b> ${inclSum.toLocaleString()} 円` +
     (printedTotal > 0
       ? `<br><b>レシート記載合計（参考）:</b> ${printedTotal.toLocaleString()} 円` +
@@ -873,6 +1012,7 @@ function stashCurrentReceiptEdits() {
     ...analyzedReceipts[currentReceiptIndex],
     shop_name: $('shopName').value.trim() || '不明',
     date: receiptDateForSave(),
+    payment_method: ($('paymentMethod').value || '現金').trim() || '現金',
     items,
     // keep printed total as reference; working total is converted
     total_amount: analyzedReceipts[currentReceiptIndex].total_amount,
@@ -912,6 +1052,8 @@ function handleClear() {
   syncShopNameDisplay();
   $('receiptDate').value = todayStr();
   syncDateDisplay();
+  $('paymentMethod').value = '現金';
+  syncPaymentDisplay();
   calcTotal();
 }
 
@@ -1066,6 +1208,7 @@ async function handleSend() {
     book: bookId,
     shop_name: $('shopName').value.trim() || '不明',
     date: receiptDateForSave(),
+    payment_method: ($('paymentMethod').value || '現金').trim() || '現金',
     total_amount: totalAmount,
     items: itemsSave
   };
@@ -1155,6 +1298,7 @@ async function handleSendAll() {
         book: bookId,
         shop_name: r.shop_name || '不明',
         date: r.date || todayStr(),
+        payment_method: (r.payment_method || '現金').trim() || '現金',
         total_amount: itemsSave.reduce((s, it) => s + it.price, 0),
         items: itemsSave
       };
@@ -1218,7 +1362,7 @@ async function handleRefreshHistory() {
       card.className = 'history-card';
       card.innerHTML = `
         <h3>${escapeHtml(r.shop_name || '不明')}</h3>
-        <div class="history-meta">保存 ${escapeHtml(formatDateTimeDisplay(r.created_at || r.date))} ／ レシート ${escapeHtml(/\d{1,2}:\d{2}/.test(String(r.date || '')) ? formatDateTimeDisplay(r.date) : formatDateDisplay(r.date))} ／ ${Number(r.total_amount || 0).toLocaleString()} 円 ／ ${r.item_count || 0}品目</div>
+        <div class="history-meta">保存 ${escapeHtml(formatDateTimeDisplay(r.created_at || r.date))} ／ レシート ${escapeHtml(/\d{1,2}:\d{2}/.test(String(r.date || '')) ? formatDateTimeDisplay(r.date) : formatDateDisplay(r.date))} ／ ${escapeHtml(r.payment_method || '現金')} ／ ${Number(r.total_amount || 0).toLocaleString()} 円 ／ ${r.item_count || 0}品目</div>
         <div class="btn-row">
           <button type="button" class="btn btn-secondary btn-detail">明細</button>
           <button type="button" class="btn btn-primary btn-image" ${r.image_file_id ? '' : 'disabled'}>画像を表示</button>
@@ -1414,8 +1558,11 @@ function init() {
   $('receiptDate').value = todayStr();
   syncShopNameDisplay();
   syncDateDisplay();
+  $('paymentMethod').value = '現金';
+  syncPaymentDisplay();
   initTabs();
   initSettings();
+  initPaymentMethodSettings();
   initImageInput();
   initGasActions();
   registerServiceWorker();
@@ -1435,6 +1582,8 @@ function init() {
   $('editShopBtn')?.addEventListener('click', editShopName);
   $('receiptDateDisplay')?.addEventListener('click', editReceiptDate);
   $('editDateBtn')?.addEventListener('click', editReceiptDate);
+  $('paymentDisplay')?.addEventListener('click', editPaymentMethod);
+  $('editPaymentBtn')?.addEventListener('click', editPaymentMethod);
   $('deleteApiKeyBtn').addEventListener('click', () => {
     if (!confirm('APIキーをこの端末から削除しますか？')) return;
     setApiKey('');

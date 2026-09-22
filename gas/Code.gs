@@ -28,7 +28,8 @@ var HEADERS = [
   'price',
   'category',
   'image_file_id',
-  'image_view_url'
+  'image_view_url',
+  'payment_method'
 ];
 
 function doPost(e) {
@@ -251,6 +252,7 @@ function saveReceipt_(data) {
   var receiptId = String(data.receipt_id || Utilities.getUuid());
   var createdAt = formatNowTokyo_();
   var imageInfo = saveImageIfPresent_(book, data, receiptId, shop);
+  var payment = String(data.payment_method || data.paymentMethod || '現金').trim() || '現金';
 
   var sheet = getSheetForBook_(book);
   var startRow = sheet.getLastRow() + 1;
@@ -267,7 +269,8 @@ function saveReceipt_(data) {
       Number(it.price || 0),
       String(it.category || 'その他'),
       imageInfo.fileId || '',
-      imageInfo.viewUrl || ''
+      imageInfo.viewUrl || '',
+      payment
     ]);
   }
   sheet.getRange(startRow, 1, rows.length, HEADERS.length).setValues(rows);
@@ -282,6 +285,7 @@ function saveReceipt_(data) {
     rows: rows.length,
     created_at: createdAt,
     date: dateStr,
+    payment_method: payment,
     image_file_id: imageInfo.fileId || '',
     image_view_url: imageInfo.viewUrl || '',
     spreadsheetUrl: SpreadsheetApp.openById(book.spreadsheetId).getUrl()
@@ -316,6 +320,7 @@ function listReceipts_(bookId, month, limit) {
         total_amount: Number(row[4] || 0),
         image_file_id: String(row[8] || ''),
         image_view_url: String(row[9] || ''),
+        payment_method: String(row[10] || '現金').trim() || '現金',
         item_count: 0
       };
     }
@@ -323,6 +328,9 @@ function listReceipts_(bookId, month, limit) {
     if (!map[rid].image_file_id && row[8]) {
       map[rid].image_file_id = String(row[8]);
       map[rid].image_view_url = String(row[9] || '');
+    }
+    if ((!map[rid].payment_method || map[rid].payment_method === '現金') && row[10]) {
+      map[rid].payment_method = String(row[10]).trim() || map[rid].payment_method;
     }
   }
 
@@ -493,7 +501,8 @@ function getReceipt_(bookId, receiptId) {
         shop_name: String(row[3] || ''),
         total_amount: Number(row[4] || 0),
         image_file_id: String(row[8] || ''),
-        image_view_url: String(row[9] || '')
+        image_view_url: String(row[9] || ''),
+        payment_method: String(row[10] || '現金').trim() || '現金'
       };
     }
     items.push({
@@ -736,17 +745,7 @@ function getSheetForBook_(book) {
   }
   var sheet = ss.getSheetByName(SHEET_NAME);
   if (!sheet) sheet = ss.insertSheet(SHEET_NAME);
-  if (sheet.getLastRow() === 0) {
-    sheet.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
-    sheet.setFrozenRows(1);
-  } else {
-    var first = sheet.getRange(1, 1, 1, HEADERS.length).getValues()[0];
-    if (String(first[0]) !== HEADERS[0]) {
-      sheet.insertRowBefore(1);
-      sheet.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
-      sheet.setFrozenRows(1);
-    }
-  }
+  ensureSheetHeaders_(sheet);
   var sheets = ss.getSheets();
   if (sheets.length > 1) {
     for (var i = 0; i < sheets.length; i++) {
@@ -756,6 +755,34 @@ function getSheetForBook_(book) {
     }
   }
   return sheet;
+}
+
+/** ヘッダー整備（payment_method など後から増えた列を追加） */
+function ensureSheetHeaders_(sheet) {
+  if (sheet.getLastRow() === 0) {
+    sheet.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
+    sheet.setFrozenRows(1);
+    return;
+  }
+  var cols = Math.max(sheet.getLastColumn(), 1);
+  var existing = sheet.getRange(1, 1, 1, cols).getValues()[0];
+  if (String(existing[0]) !== HEADERS[0]) {
+    sheet.insertRowBefore(1);
+    sheet.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
+    sheet.setFrozenRows(1);
+    return;
+  }
+  var names = {};
+  for (var i = 0; i < existing.length; i++) {
+    names[String(existing[i] || '')] = true;
+  }
+  for (var h = 0; h < HEADERS.length; h++) {
+    if (names[HEADERS[h]]) continue;
+    var col = sheet.getLastColumn() + 1;
+    sheet.getRange(1, col).setValue(HEADERS[h]);
+    names[HEADERS[h]] = true;
+  }
+  sheet.setFrozenRows(1);
 }
 
 function authFriendlyError_(err) {

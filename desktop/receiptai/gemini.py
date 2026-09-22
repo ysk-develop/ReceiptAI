@@ -22,6 +22,10 @@ LINE_SCHEMA = {
         "shop_name": {"type": "string"},
         "date": {"type": "string"},
         "total_amount": {"type": "number"},
+        "payment_method": {
+            "type": "string",
+            "description": "支払い方法。例: 現金, WAON, PayPay, 楽天Pay, クレジット。不明なら現金",
+        },
         "name": {"type": "string"},
         "price": {"type": "number", "description": "印字の個別金額（税抜が多い）"},
         "tax_rate_type": {"type": "string", "description": "standard or reduced"},
@@ -32,6 +36,7 @@ LINE_SCHEMA = {
         "shop_name",
         "date",
         "total_amount",
+        "payment_method",
         "name",
         "price",
         "tax_rate_type",
@@ -202,6 +207,15 @@ def fetch_models(api_key: str) -> list[dict[str, str]]:
     return models
 
 
+def normalize_payment_method(value: object) -> str:
+    s = str(value or "").strip()
+    if not s:
+        return "現金"
+    cleaned = re.sub(r"[¥￥]\s*[\d,]+", "", s)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned or "現金"
+
+
 def normalize_analysis_result(parsed: dict[str, Any], today: str) -> list[dict[str, Any]]:
     if isinstance(parsed.get("lines"), list) and parsed["lines"]:
         groups: dict[int, dict[str, Any]] = {}
@@ -215,6 +229,7 @@ def normalize_analysis_result(parsed: dict[str, Any], today: str) -> list[dict[s
                     "shop_name": str(line.get("shop_name") or "不明").strip() or "不明",
                     "date": date_str[:10],
                     "total_amount": float(line.get("total_amount") or 0),
+                    "payment_method": normalize_payment_method(line.get("payment_method")),
                     "items": [],
                 }
             g = groups[idx]
@@ -236,6 +251,8 @@ def normalize_analysis_result(parsed: dict[str, Any], today: str) -> list[dict[s
                 g["total_amount"] = float(line["total_amount"])
             if line.get("shop_name"):
                 g["shop_name"] = str(line["shop_name"]).strip() or g["shop_name"]
+            if line.get("payment_method"):
+                g["payment_method"] = normalize_payment_method(line.get("payment_method"))
             d = str(line.get("date") or "").strip()
             if re.match(r"^\d{4}-\d{2}-\d{2}$", d):
                 g["date"] = d
@@ -285,6 +302,7 @@ def normalize_analysis_result(parsed: dict[str, Any], today: str) -> list[dict[s
                 "shop_name": str(r.get("shop_name") or "不明").strip() or "不明",
                 "date": date_str[:10],
                 "total_amount": total,
+                "payment_method": normalize_payment_method(r.get("payment_method")),
                 "items": items,
                 "_index": i,
             }
@@ -314,6 +332,7 @@ def analyze_receipt(
 
 【金額】price は印字どおり（税抜が多い）。tax_rate_type は軽減なら reduced、それ以外は standard。
 total_amount はレシート税込合計（参考）。小計・税・合計行は lines に入れない。
+【支払い方法】合計直下や「○○支払」「現金」「クレジット」などから payment_method を読み取る。不明なら現金。
 カテゴリ: [{cats}]
 日付不明のみ {today}。JSONのみ。"""
     if memo.strip():

@@ -44,6 +44,9 @@ def sync_from_sheet(
                 str(full.get("shop_name") or summary.get("shop_name") or "不明"),
                 str(full.get("date") or summary.get("date") or ""),
                 items,
+                payment_method=str(
+                    full.get("payment_method") or summary.get("payment_method") or "現金"
+                ),
                 book_id=book_id,
                 image_file_id=str(full.get("image_file_id") or summary.get("image_file_id") or ""),
                 image_view_url=str(full.get("image_view_url") or summary.get("image_view_url") or ""),

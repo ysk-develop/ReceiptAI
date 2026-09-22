@@ -37,7 +37,15 @@ from PyQt6.QtWidgets import (
 )
 
 from . import charts, db, gas_client, gemini, importer, sheets_sync
-from .config import CATEGORIES, DB_PATH, load_config, save_config
+from .config import (
+    CATEGORIES,
+    DB_PATH,
+    ensure_payment_method,
+    get_payment_methods,
+    load_config,
+    normalize_payment_methods,
+    save_config,
+)
 from .image_util import resize_to_jpeg_base64
 from .styles import APP_STYLESHEET
 from .tax_util import calc_inclusive, normalize_rate_type
@@ -273,8 +281,8 @@ class MainWindow(QMainWindow):
         table_card = _card()
         tv = QVBoxLayout(table_card)
         tv.setContentsMargins(8, 8, 8, 8)
-        self.list_table = QTableWidget(0, 6)
-        self.list_table.setHorizontalHeaderLabels(["日付", "店舗", "合計", "編集", "画像", "削除"])
+        self.list_table = QTableWidget(0, 7)
+        self.list_table.setHorizontalHeaderLabels(["日付", "店舗", "支払", "合計", "編集", "画像", "削除"])
         self.list_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.list_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.list_table.verticalHeader().setVisible(False)
@@ -284,12 +292,13 @@ class MainWindow(QMainWindow):
         hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
         hdr.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
-        self.list_table.setColumnWidth(3, 88)
+        hdr.setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)
         self.list_table.setColumnWidth(4, 88)
         self.list_table.setColumnWidth(5, 88)
+        self.list_table.setColumnWidth(6, 88)
         self.list_table.verticalHeader().setDefaultSectionSize(LIST_ROW_HEIGHT)
         self.list_table.verticalHeader().setMinimumSectionSize(LIST_ROW_HEIGHT)
         tv.addWidget(self.list_table)
@@ -334,14 +343,17 @@ class MainWindow(QMainWindow):
             self.list_table.setRowHeight(row, LIST_ROW_HEIGHT)
             self.list_table.setItem(row, 0, QTableWidgetItem(str(r["date"])))
             self.list_table.setItem(row, 1, QTableWidgetItem(str(r["shop_name"])))
+            self.list_table.setItem(
+                row, 2, QTableWidgetItem(str(r["payment_method"] or "現金"))
+            )
             amt = QTableWidgetItem(f'{float(r["total_amount"]):,.0f} 円')
             amt.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            self.list_table.setItem(row, 2, amt)
+            self.list_table.setItem(row, 3, amt)
 
             rid = int(r["id"])
             self.list_table.setCellWidget(
                 row,
-                3,
+                4,
                 _table_cell_button(
                     "編集",
                     "SecondaryButton",
@@ -360,12 +372,12 @@ class MainWindow(QMainWindow):
             img_btn = img_cell.findChild(QPushButton)
             if img_btn is not None:
                 img_btn.setEnabled(has_img)
-            self.list_table.setCellWidget(row, 4, img_cell)
+            self.list_table.setCellWidget(row, 5, img_cell)
 
             cloud_id = str(r.get("cloud_receipt_id") or "")
             self.list_table.setCellWidget(
                 row,
-                5,
+                6,
                 _table_cell_button(
                     "削除",
                     "DangerButton",
@@ -402,6 +414,14 @@ class MainWindow(QMainWindow):
         self.date_edit = QLineEdit(date.today().isoformat())
         right.addWidget(self.date_edit)
         fl.addLayout(right, 1)
+
+        pay = QVBoxLayout()
+        pay.addWidget(QLabel("支払い方法"))
+        self.payment_combo = QComboBox()
+        self.payment_combo.setEditable(False)
+        self._refresh_payment_combo("現金")
+        pay.addWidget(self.payment_combo)
+        fl.addLayout(pay, 1)
         layout.addWidget(form)
 
         items_card = _card()
@@ -584,6 +604,7 @@ class MainWindow(QMainWindow):
         self._selected_id = None
         self.shop_edit.clear()
         self.date_edit.setText(date.today().isoformat())
+        self._refresh_payment_combo("現金")
         self._clear_items()
         self._add_item_row()
         self.tabs.setCurrentIndex(1)
@@ -596,6 +617,7 @@ class MainWindow(QMainWindow):
         self._selected_id = receipt_id
         self.shop_edit.setText(data["shop_name"])
         self.date_edit.setText(data["date"])
+        self._refresh_payment_combo(str(data.get("payment_method") or "現金"))
         self._clear_items()
         for it in data["items"]:
             self._add_item_row(it["name"], it["price"], it["category"], it.get("tax_rate_type", ""))
@@ -606,6 +628,7 @@ class MainWindow(QMainWindow):
     def save_receipt(self) -> None:
         shop = self.shop_edit.text().strip() or "不明"
         d = self.date_edit.text().strip()
+        payment = self.payment_combo.currentText().strip() or "現金"
         items = self._collect_items()
         if not d:
             QMessageBox.warning(self, "入力", "日付を入力してください")
@@ -615,10 +638,14 @@ class MainWindow(QMainWindow):
             return
         try:
             if self._selected_id is None:
-                rid, _ = db.insert_receipt(shop, d, items)
+                rid, _ = db.insert_receipt(shop, d, items, payment_method=payment)
                 self._selected_id = rid
             else:
-                db.update_receipt(self._selected_id, shop, d, items)
+                db.update_receipt(
+                    self._selected_id, shop, d, items, payment_method=payment
+                )
+            ensure_payment_method(payment, self.cfg)
+            self._refresh_payment_settings_combo()
             QMessageBox.information(self, "保存", "保存しました")
             self.refresh_all()
             self.tabs.setCurrentIndex(0)
@@ -820,6 +847,7 @@ class MainWindow(QMainWindow):
             **self._analyzed_receipts[i],
             "shop_name": self.shop_edit.text().strip() or "不明",
             "date": self.date_edit.text().strip() or date.today().isoformat(),
+            "payment_method": self.payment_combo.currentText().strip() or "現金",
             "items": items,
             "total_amount": self._analyzed_receipts[i].get("total_amount") or 0,
         }
@@ -831,6 +859,9 @@ class MainWindow(QMainWindow):
         r = self._analyzed_receipts[index]
         self.shop_edit.setText(str(r.get("shop_name") or ""))
         self.date_edit.setText(str(r.get("date") or date.today().isoformat()))
+        pm = str(r.get("payment_method") or "現金").strip() or "現金"
+        ensure_payment_method(pm, self.cfg)
+        self._refresh_payment_combo(pm)
         self._clear_items()
         for it in r.get("items") or []:
             self._add_item_row(
@@ -939,6 +970,29 @@ class MainWindow(QMainWindow):
         bops.addWidget(del_book)
         bops.addStretch(1)
         v.addLayout(bops)
+
+        _hint("支払い方法（解析・修正時の選択肢。初期は 現金 / WAON / PayPay）")
+        prow = QHBoxLayout()
+        prow.setSpacing(8)
+        self.payment_settings_combo = QComboBox()
+        _fix_edit(self.payment_settings_combo)
+        prow.addWidget(self.payment_settings_combo, 1)
+        v.addLayout(prow)
+        self._refresh_payment_settings_combo()
+
+        pops = QHBoxLayout()
+        pops.setSpacing(8)
+        add_pay = _fix_btn(_btn("追加", "SecondaryButton"))
+        add_pay.clicked.connect(self.add_payment_method)
+        rename_pay = _fix_btn(_btn("名前変更", "SecondaryButton"))
+        rename_pay.clicked.connect(self.rename_payment_method)
+        del_pay = _fix_btn(_btn("削除", "DangerButton"))
+        del_pay.clicked.connect(self.delete_payment_method)
+        pops.addWidget(add_pay)
+        pops.addWidget(rename_pay)
+        pops.addWidget(del_pay)
+        pops.addStretch(1)
+        v.addLayout(pops)
 
         clear_btn = _fix_btn(_btn("ローカル一覧を全消去", "DangerButton"))
         clear_btn.clicked.connect(self.clear_local_db)
@@ -1051,9 +1105,105 @@ class MainWindow(QMainWindow):
         self.cfg["tax_reduced_rate"] = int(self.tax_red.value())
         self.cfg["tax_default_rate_type"] = self.tax_default.currentData() or "standard"
         self.cfg["tax_rounding"] = self.tax_round.currentData() or "floor"
+        self.cfg["payment_methods"] = normalize_payment_methods(
+            [self.payment_settings_combo.itemText(i) for i in range(self.payment_settings_combo.count())]
+            if hasattr(self, "payment_settings_combo")
+            else self.cfg.get("payment_methods")
+        )
         save_config(self.cfg)
+        self._refresh_payment_combo(self.payment_combo.currentText() if hasattr(self, "payment_combo") else "現金")
         self._recalc_total()
         QMessageBox.information(self, "設定", "保存しました")
+
+    def _refresh_payment_combo(self, preferred: str = "") -> None:
+        if not hasattr(self, "payment_combo"):
+            return
+        methods = get_payment_methods(self.cfg)
+        want = (preferred or self.payment_combo.currentText() or "現金").strip() or "現金"
+        if want not in methods:
+            methods = ensure_payment_method(want, self.cfg)
+            self._refresh_payment_settings_combo()
+        self.payment_combo.blockSignals(True)
+        self.payment_combo.clear()
+        self.payment_combo.addItems(methods)
+        idx = self.payment_combo.findText(want)
+        self.payment_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self.payment_combo.blockSignals(False)
+
+    def _refresh_payment_settings_combo(self, preferred: str = "") -> None:
+        if not hasattr(self, "payment_settings_combo"):
+            return
+        methods = get_payment_methods(self.cfg)
+        want = preferred or self.payment_settings_combo.currentText()
+        self.payment_settings_combo.blockSignals(True)
+        self.payment_settings_combo.clear()
+        self.payment_settings_combo.addItems(methods)
+        idx = self.payment_settings_combo.findText(want) if want else -1
+        self.payment_settings_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self.payment_settings_combo.blockSignals(False)
+
+    def add_payment_method(self) -> None:
+        name, ok = QInputDialog.getText(self, "支払い方法を追加", "新しい支払い方法:")
+        if not ok:
+            return
+        trimmed = name.strip()
+        if not trimmed:
+            QMessageBox.warning(self, "支払い方法", "名前を入力してください")
+            return
+        methods = get_payment_methods(self.cfg)
+        if trimmed in methods:
+            QMessageBox.information(self, "支払い方法", "すでに登録されています")
+            return
+        methods.append(trimmed)
+        self.cfg["payment_methods"] = methods
+        save_config(self.cfg)
+        self._refresh_payment_settings_combo(trimmed)
+        self._refresh_payment_combo(self.payment_combo.currentText() if hasattr(self, "payment_combo") else trimmed)
+        QMessageBox.information(self, "支払い方法", f"「{trimmed}」を追加しました")
+
+    def rename_payment_method(self) -> None:
+        current = self.payment_settings_combo.currentText() if hasattr(self, "payment_settings_combo") else ""
+        if not current:
+            return
+        name, ok = QInputDialog.getText(self, "名前変更", "新しい支払い方法名:", text=current)
+        if not ok:
+            return
+        trimmed = name.strip()
+        if not trimmed:
+            QMessageBox.warning(self, "支払い方法", "名前を入力してください")
+            return
+        methods = [trimmed if x == current else x for x in get_payment_methods(self.cfg)]
+        self.cfg["payment_methods"] = normalize_payment_methods(methods)
+        save_config(self.cfg)
+        if hasattr(self, "payment_combo") and self.payment_combo.currentText() == current:
+            self._refresh_payment_combo(trimmed)
+        else:
+            self._refresh_payment_combo(self.payment_combo.currentText() if hasattr(self, "payment_combo") else "")
+        self._refresh_payment_settings_combo(trimmed)
+        QMessageBox.information(self, "支払い方法", f"「{trimmed}」に変更しました")
+
+    def delete_payment_method(self) -> None:
+        current = self.payment_settings_combo.currentText() if hasattr(self, "payment_settings_combo") else ""
+        if not current:
+            return
+        methods = get_payment_methods(self.cfg)
+        if len(methods) <= 1:
+            QMessageBox.warning(self, "支払い方法", "支払い方法は少なくとも1つ必要です")
+            return
+        if (
+            QMessageBox.question(self, "確認", f"「{current}」を削除しますか？")
+            != QMessageBox.StandardButton.Yes
+        ):
+            return
+        next_methods = [x for x in methods if x != current]
+        self.cfg["payment_methods"] = next_methods
+        save_config(self.cfg)
+        if hasattr(self, "payment_combo") and self.payment_combo.currentText() == current:
+            self._refresh_payment_combo(next_methods[0])
+        else:
+            self._refresh_payment_combo(self.payment_combo.currentText() if hasattr(self, "payment_combo") else "")
+        self._refresh_payment_settings_combo()
+        QMessageBox.information(self, "支払い方法", f"「{current}」を削除しました")
 
     def refresh_books(self, silent: bool = False) -> None:
         url = self.gas_edit.text().strip() or self.cfg.get("gas_url") or ""
@@ -1347,6 +1497,7 @@ class MainWindow(QMainWindow):
             "book": book_id,
             "shop_name": self.shop_edit.text().strip() or "不明",
             "date": self.date_edit.text().strip() or date.today().isoformat(),
+            "payment_method": self.payment_combo.currentText().strip() or "現金",
             "total_amount": sum(i["price"] for i in items),
             "items": items,
             "timestamp": date.today().isoformat(),
@@ -1415,10 +1566,14 @@ class MainWindow(QMainWindow):
                     payload["shop_name"],
                     payload["date"],
                     items,
+                    payment_method=payload.get("payment_method") or "現金",
                     book_id=book_id,
                     image_file_id=str(result.get("image_file_id") or ""),
                     image_view_url=str(result.get("image_view_url") or ""),
                 )
+                ensure_payment_method(payload.get("payment_method") or "現金", self.cfg)
+                self._refresh_payment_settings_combo()
+                self._refresh_payment_combo(payload.get("payment_method") or "現金")
             QMessageBox.information(self, "保存", "スプレッドシートへ保存しました")
             self.refresh_all()
         except Exception as exc:  # noqa: BLE001

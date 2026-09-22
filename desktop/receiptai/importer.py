@@ -20,6 +20,7 @@ def file_hash(path: Path) -> str:
 def parse_receipt_json(raw: dict[str, Any]) -> dict[str, Any]:
     shop = str(raw.get("shop_name") or "不明")
     date = str(raw.get("date") or "")
+    payment = str(raw.get("payment_method") or "現金").strip() or "現金"
     items_raw = raw.get("items") or []
     items = []
     for it in items_raw:
@@ -37,6 +38,7 @@ def parse_receipt_json(raw: dict[str, Any]) -> dict[str, Any]:
     return {
         "shop_name": shop,
         "date": date,
+        "payment_method": payment,
         "items": items,
         "total_amount": float(raw.get("total_amount") or sum(i["price"] for i in items)),
         "timestamp": raw.get("timestamp"),
@@ -108,6 +110,7 @@ def import_folder(
                 parsed["shop_name"],
                 parsed["date"],
                 parsed["items"],
+                payment_method=parsed.get("payment_method") or "現金",
                 source_file=str(path.name),
                 source_hash=digest,
             )
@@ -135,6 +138,7 @@ def import_payload(raw: dict[str, Any], *, source_file: str | None = None) -> in
         parsed["shop_name"],
         parsed["date"],
         parsed["items"],
+        payment_method=parsed.get("payment_method") or "現金",
         source_file=source_file,
     )
     return rid

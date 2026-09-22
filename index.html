@@ -14,7 +14,7 @@
 <body>
   <header class="header">
     <h1>🧾 レシート自動仕分け</h1>
-    <p class="app-version" id="appVersion">v24</p>
+    <p class="app-version" id="appVersion">v26</p>
   </header>
 
   <nav class="tabs" role="tablist">
@@ -77,6 +77,12 @@
             <button type="button" id="receiptDateDisplay" class="meta-line-value" aria-label="日付を編集">—</button>
             <input type="hidden" id="receiptDate" value="">
             <button type="button" class="btn btn-secondary btn-sm meta-line-edit" id="editDateBtn">修正</button>
+          </div>
+          <div class="meta-line">
+            <span class="meta-line-label">支払</span>
+            <button type="button" id="paymentDisplay" class="meta-line-value" aria-label="支払い方法を編集">現金</button>
+            <input type="hidden" id="paymentMethod" value="現金">
+            <button type="button" class="btn btn-secondary btn-sm meta-line-edit" id="editPaymentBtn">修正</button>
           </div>
 
           <div id="itemList"></div>
@@ -195,6 +201,22 @@
         </div>
       </details>
 
+      <details class="settings-section" id="paymentSettings">
+        <summary>支払い方法</summary>
+        <div class="settings-section-body">
+          <p class="hint">解析・修正時の選択肢です。初期は 現金 / WAON / PayPay。追加・名前変更・削除できます。</p>
+          <div class="form-row">
+            <label for="paymentMethodSelect">登録済みの支払い方法</label>
+            <select id="paymentMethodSelect"></select>
+          </div>
+          <div class="btn-row">
+            <button type="button" id="addPaymentMethodBtn" class="btn btn-secondary">追加</button>
+            <button type="button" id="renamePaymentMethodBtn" class="btn btn-secondary">名前変更</button>
+            <button type="button" id="deletePaymentMethodBtn" class="btn btn-danger-outline">削除</button>
+          </div>
+        </div>
+      </details>
+
       <details class="settings-section">
         <summary>カテゴリ一覧</summary>
         <div class="settings-section-body">
@@ -208,7 +230,7 @@
         <div class="settings-section-body">
           <p class="about-text">解析結果は選択中の帳簿の Google スプレッドシートに保存され、画像は各帳簿フォルダの images に保管されます。履歴タブで同期表示できます。</p>
           <p class="about-text">APIキー・GAS URL・選択中の帳簿は各端末の localStorage にのみ保存されます。</p>
-          <p class="about-text">アプリバージョン: <strong id="aboutVersion">v24</strong>（この数字が上がっていれば最新のデプロイが届いています）</p>
+          <p class="about-text">アプリバージョン: <strong id="aboutVersion">v26</strong>（この数字が上がっていれば最新のデプロイが届いています）</p>
         </div>
       </details>
     </section>
@@ -237,6 +259,7 @@
       <textarea id="fieldModalText" class="field-modal-input hidden" rows="4"></textarea>
       <input id="fieldModalNumber" class="field-modal-input hidden" type="number" inputmode="numeric">
       <input id="fieldModalDate" class="field-modal-input hidden" type="date">
+      <select id="fieldModalSelect" class="field-modal-input hidden"></select>
       <div class="btn-row" style="margin-top:12px">
         <button type="button" class="btn btn-primary" id="fieldModalOk">確定</button>
       </div>

@@ -82,6 +82,11 @@ const LINE_SCHEMA = {
       type: 'number',
       description: 'そのレシート印字の税込合計（参考値）'
     },
+    payment_method: {
+      type: 'string',
+      description:
+        '支払い方法。例: 現金, WAON, PayPay, 楽天Pay, 楽天ポイント, クレジット, iD, 交通系IC。合計付近や支払明細から読み取る。不明なら現金'
+    },
     name: { type: 'string', description: '品目名（小計・税・合計行は出さない）' },
     price: {
       type: 'number',
@@ -98,6 +103,7 @@ const LINE_SCHEMA = {
     'shop_name',
     'date',
     'total_amount',
+    'payment_method',
     'name',
     'price',
     'tax_rate_type',
@@ -131,7 +137,13 @@ function buildPrompt(today, memo) {
 - 左右（または上下）に並ぶレシートはすべて別番号です（1,2,3...）。
 - 同じ店舗名・同じ日でも、紙が別なら別の receipt_index にしてください。
 - lines には全レシートの全品目を漏れなく出してください。1枚分だけ出力するのは誤りです（写真に1枚しかない場合を除く）。
-- 各行に shop_name / date / total_amount をそのレシートのもので繰り返してください。
+- 各行に shop_name / date / total_amount / payment_method をそのレシートのもので繰り返してください。
+
+【支払い方法】
+- 合計の直下や「○○支払」「現金」「クレジット」などの表記から payment_method を読み取る。
+- 例: WAON, PayPay, 楽天Pay, 楽天ポイント, 現金, クレジット, iD, QUICPay, 交通系IC。
+- ポイント全額払いもそのポイント名（例: 楽天ポイント）。複合払いで主たるものが分かるならそれを優先。
+- どうしても不明なときのみ「現金」。
 
 【金額】
 - price はレシートに印字されている個別金額をそのまま（多くの店では税抜）。アプリ側で税込換算するため、勝手に税込へ直さない。
@@ -157,6 +169,14 @@ function localTodayStr() {
   const d = new Date();
   const p = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+export function normalizePaymentMethod(value) {
+  const s = String(value || '').trim();
+  if (!s) return '現金';
+  // strip yen amounts like "WAON ¥550"
+  const cleaned = s.replace(/[¥￥]\s*[\d,]+/g, '').replace(/\s+/g, ' ').trim();
+  return cleaned || '現金';
 }
 
 /** Accept YYYY-MM-DD or YYYY-MM-DD HH:mm[:ss] / with slashes; else fallback */
@@ -188,6 +208,7 @@ export function normalizeAnalysisResult(parsed, today = localTodayStr()) {
           shop_name: String(line.shop_name || '不明').trim() || '不明',
           date: normalizeReceiptDate(line.date, today),
           total_amount: Number(line.total_amount) || 0,
+          payment_method: normalizePaymentMethod(line.payment_method),
           items: []
         });
       }
@@ -205,6 +226,9 @@ export function normalizeAnalysisResult(parsed, today = localTodayStr()) {
       });
       if (Number(line.total_amount) > 0) g.total_amount = Number(line.total_amount);
       if (line.shop_name) g.shop_name = String(line.shop_name).trim() || g.shop_name;
+      if (line.payment_method) {
+        g.payment_method = normalizePaymentMethod(line.payment_method);
+      }
       if (line.date && /^\d{4}-\d{2}-\d{2}$/.test(String(line.date).trim())) {
         g.date = String(line.date).trim();
       }
@@ -249,6 +273,7 @@ export function normalizeAnalysisResult(parsed, today = localTodayStr()) {
       shop_name: String(r.shop_name || '不明').trim() || '不明',
       date: dateStr,
       total_amount: total,
+      payment_method: normalizePaymentMethod(r.payment_method),
       items,
       _index: idx
     };

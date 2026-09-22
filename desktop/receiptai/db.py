@@ -81,6 +81,8 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
         alter.append("ALTER TABLE receipts ADD COLUMN image_view_url TEXT DEFAULT ''")
     if "book_id" not in cols:
         alter.append("ALTER TABLE receipts ADD COLUMN book_id TEXT DEFAULT ''")
+    if "payment_method" not in cols:
+        alter.append("ALTER TABLE receipts ADD COLUMN payment_method TEXT DEFAULT '現金'")
     for sql in alter:
         conn.execute(sql)
     # unique index for cloud id (ignore nulls / empties via partial not available on older sqlite — use unique where possible)
@@ -101,6 +103,7 @@ def insert_receipt(
     date: str,
     items: list[dict[str, Any]],
     *,
+    payment_method: str = "現金",
     source_file: str | None = None,
     source_hash: str | None = None,
     cloud_receipt_id: str | None = None,
@@ -112,6 +115,7 @@ def insert_receipt(
 ) -> tuple[int, bool]:
     """Insert receipt. Returns (id, created). Skip if source_hash or cloud_receipt_id exists."""
     total = sum(float(i.get("price") or 0) for i in items)
+    payment = str(payment_method or "現金").strip() or "現金"
     ts = _now()
     with get_conn(db_path) as conn:
         if source_hash:
@@ -132,9 +136,9 @@ def insert_receipt(
             INSERT INTO receipts (
                 shop_name, date, total_amount, source_file, source_hash,
                 cloud_receipt_id, book_id, image_file_id, image_view_url,
-                created_at, updated_at, note
+                created_at, updated_at, note, payment_method
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 shop_name or "不明",
@@ -149,6 +153,7 @@ def insert_receipt(
                 ts,
                 ts,
                 note,
+                payment,
             ),
         )
         rid = int(cur.lastrowid)
@@ -171,6 +176,7 @@ def upsert_cloud_receipt(
     date: str,
     items: list[dict[str, Any]],
     *,
+    payment_method: str = "現金",
     book_id: str = "",
     image_file_id: str = "",
     image_view_url: str = "",
@@ -178,6 +184,7 @@ def upsert_cloud_receipt(
 ) -> tuple[int, bool]:
     """Insert or refresh a receipt keyed by cloud_receipt_id. Returns (id, created)."""
     total = sum(float(i.get("price") or 0) for i in items)
+    payment = str(payment_method or "現金").strip() or "現金"
     ts = _now()
     with get_conn(db_path) as conn:
         existing = conn.execute(
@@ -188,7 +195,7 @@ def upsert_cloud_receipt(
             conn.execute(
                 """
                 UPDATE receipts
-                SET shop_name = ?, date = ?, total_amount = ?,
+                SET shop_name = ?, date = ?, total_amount = ?, payment_method = ?,
                     book_id = ?, image_file_id = ?, image_view_url = ?, updated_at = ?
                 WHERE id = ?
                 """,
@@ -196,6 +203,7 @@ def upsert_cloud_receipt(
                     shop_name,
                     date,
                     total,
+                    payment,
                     book_id or "",
                     image_file_id or "",
                     image_view_url or "",
@@ -220,9 +228,9 @@ def upsert_cloud_receipt(
             """
             INSERT INTO receipts (
                 shop_name, date, total_amount, cloud_receipt_id, book_id,
-                image_file_id, image_view_url, created_at, updated_at, note
+                image_file_id, image_view_url, created_at, updated_at, note, payment_method
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '')
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?)
             """,
             (
                 shop_name,
@@ -234,6 +242,7 @@ def upsert_cloud_receipt(
                 image_view_url or "",
                 ts,
                 ts,
+                payment,
             ),
         )
         rid = int(cur.lastrowid)
@@ -256,17 +265,20 @@ def update_receipt(
     date: str,
     items: list[dict[str, Any]],
     note: str = "",
+    payment_method: str = "現金",
     db_path: Path | None = None,
 ) -> None:
     total = sum(float(i.get("price") or 0) for i in items)
+    payment = str(payment_method or "現金").strip() or "現金"
     with get_conn(db_path) as conn:
         conn.execute(
             """
             UPDATE receipts
-            SET shop_name = ?, date = ?, total_amount = ?, note = ?, updated_at = ?
+            SET shop_name = ?, date = ?, total_amount = ?, note = ?,
+                payment_method = ?, updated_at = ?
             WHERE id = ?
             """,
-            (shop_name, date, total, note, _now(), receipt_id),
+            (shop_name, date, total, note, payment, _now(), receipt_id),
         )
         conn.execute("DELETE FROM items WHERE receipt_id = ?", (receipt_id,))
         for item in items:

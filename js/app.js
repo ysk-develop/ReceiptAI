@@ -559,33 +559,41 @@ function addItemRow(name = '', price = '', category = '食費', taxRateType = ''
   }
   row.innerHTML = `
     <div class="item-card-head">
-      <div class="item-card-name-wrap">
+      <div class="item-card-title-row">
         <span class="item-card-label">品目</span>
-        <p class="item-card-name i-name-display"></p>
-        <input class="i-name hidden" type="hidden" value="${escapeHtml(name)}">
+        <button type="button" class="btn-icon" aria-label="行を削除">✕</button>
       </div>
-      <button type="button" class="btn btn-secondary btn-sm i-edit-name">修正</button>
-      <button type="button" class="btn-icon" aria-label="行を削除">✕</button>
+      <p class="item-card-name i-name-display"></p>
+      <input class="i-name hidden" type="hidden" value="${escapeHtml(name)}">
+      <button type="button" class="btn btn-secondary btn-sm item-card-edit i-edit-name">品目を修正</button>
     </div>
     <ul class="item-card-lines">
       <li>
-        <span class="item-card-label">税抜</span>
-        <span class="item-card-value i-price-display"></span>
-        <button type="button" class="btn btn-secondary btn-sm i-edit-price">修正</button>
+        <div class="item-card-line-main">
+          <span class="item-card-label">税抜</span>
+          <span class="item-card-value i-price-display"></span>
+        </div>
+        <button type="button" class="btn btn-secondary btn-sm item-card-edit i-edit-price">修正</button>
         <input class="i-price hidden" type="hidden" value="${exclVal}">
       </li>
       <li>
-        <span class="item-card-label">税率</span>
-        <select class="i-tax item-card-select">${taxRateOptionsHtml(rateType)}</select>
+        <div class="item-card-line-main">
+          <span class="item-card-label">税率</span>
+          <select class="i-tax item-card-select">${taxRateOptionsHtml(rateType)}</select>
+        </div>
       </li>
       <li>
-        <span class="item-card-label">税込</span>
-        <span class="item-card-value item-incl">0</span>
-        <button type="button" class="btn btn-secondary btn-sm i-edit-incl">修正</button>
+        <div class="item-card-line-main">
+          <span class="item-card-label">税込</span>
+          <span class="item-card-value item-incl">0</span>
+        </div>
+        <button type="button" class="btn btn-secondary btn-sm item-card-edit i-edit-incl">修正</button>
       </li>
       <li>
-        <span class="item-card-label">カテゴリ</span>
-        <select class="i-cat item-card-select">${categoryOptionsHtml(category)}</select>
+        <div class="item-card-line-main">
+          <span class="item-card-label">カテゴリ</span>
+          <select class="i-cat item-card-select">${categoryOptionsHtml(category)}</select>
+        </div>
       </li>
     </ul>
   `;

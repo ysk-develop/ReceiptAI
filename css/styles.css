@@ -341,25 +341,29 @@ main {
   cursor: pointer;
 }
 
-/* Item cards (label list — works with large Dynamic Type / SE) */
+/* Item cards — stacked label layout (never share a row with width:100% buttons) */
 .item-card {
   background: #f8fffe;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 0.75rem 0.85rem;
   margin-bottom: 0.65rem;
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .item-card-head {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.5rem;
+  display: block;
   margin-bottom: 0.55rem;
 }
 
-.item-card-name-wrap {
-  flex: 1;
-  min-width: 0;
+.item-card-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.25rem;
 }
 
 .item-card-label {
@@ -370,20 +374,44 @@ main {
   margin-bottom: 0.15rem;
 }
 
+.item-card-title-row .item-card-label {
+  margin-bottom: 0;
+}
+
 .item-card-name {
-  margin: 0;
-  font-size: 1rem;
+  display: block;
+  width: 100%;
+  margin: 0 0 0.5rem;
+  padding: 0;
+  font-size: 1.05rem;
   font-weight: 700;
   color: var(--primary);
-  line-height: 1.35;
-  word-break: break-word;
-  overflow-wrap: anywhere;
+  line-height: 1.4;
   white-space: normal;
+  word-break: normal;
+  overflow-wrap: break-word;
+  box-sizing: border-box;
 }
 
 .item-card-name[data-empty="1"] {
   color: var(--text-muted);
   font-weight: 500;
+}
+
+/* Global .btn is width:100% — must override inside cards */
+.item-card .btn,
+.item-card .btn-sm,
+.item-card .item-card-edit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: auto;
+  max-width: 100%;
+  margin-top: 0;
+  margin-bottom: 0;
+  flex: 0 0 auto;
+  padding: 0.4rem 0.75rem;
+  font-size: 0.85rem;
 }
 
 .item-card-lines {
@@ -395,11 +423,13 @@ main {
 
 .item-card-lines li {
   display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
   align-items: center;
+  justify-content: space-between;
   gap: 0.5rem;
-  padding: 0.45rem 0;
+  padding: 0.55rem 0;
   border-bottom: 1px solid #f0fdfa;
-  flex-wrap: wrap;
 }
 
 .item-card-lines li:last-child {
@@ -407,21 +437,33 @@ main {
   padding-bottom: 0;
 }
 
+.item-card-line-main {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .item-card-lines .item-card-label {
-  display: inline-block;
-  width: 4.2em;
-  flex-shrink: 0;
+  display: block;
+  width: 3.5em;
+  flex: 0 0 3.5em;
   margin: 0;
   font-size: 0.8rem;
 }
 
 .item-card-value {
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
   font-size: 0.95rem;
   font-weight: 600;
   color: var(--text);
-  word-break: break-word;
+  white-space: normal;
+  word-break: normal;
+  overflow-wrap: break-word;
 }
 
 .item-card-value[data-empty="1"] {
@@ -439,8 +481,9 @@ main {
 }
 
 .item-card-select {
-  flex: 1;
-  min-width: 7rem;
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
   max-width: 100%;
   padding: 0.45rem 0.5rem;
   border: 1px solid var(--border);
@@ -448,17 +491,14 @@ main {
   font-size: 0.9rem;
   background: white;
   color: var(--text);
-}
-
-.item-card .btn-sm {
-  flex-shrink: 0;
-  padding: 0.35rem 0.65rem;
-  font-size: 0.78rem;
+  box-sizing: border-box;
 }
 
 .item-card .btn-icon {
-  flex-shrink: 0;
-  margin-top: 0.15rem;
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  margin: 0;
 }
 
 .total-box {

@@ -1,5 +1,5 @@
 // Keep APP_VERSION in sync with js/version.js
-const APP_VERSION = '22';
+const APP_VERSION = '23';
 const CACHE_NAME = `receipt-ai-v${APP_VERSION}`;
 const ASSETS = [
   './',

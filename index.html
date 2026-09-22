@@ -14,7 +14,7 @@
 <body>
   <header class="header">
     <h1>🧾 レシート自動仕分け</h1>
-    <p class="app-version" id="appVersion">v22</p>
+    <p class="app-version" id="appVersion">v23</p>
   </header>
 
   <nav class="tabs" role="tablist">
@@ -78,7 +78,7 @@
             </div>
           </div>
 
-          <p class="hint" style="margin-top:0.75rem">明細は一覧表示です。各項目の「修正」で個別に編集できます（大きい文字でも横に潰れません）。</p>
+          <p class="hint" style="margin-top:0.75rem">品目名をタップまたは「修正」で詳細を編集できます。</p>
           <div id="itemList"></div>
           <button id="addItemBtn" class="btn btn-secondary btn-sm">+ 明細行を追加</button>
 
@@ -208,7 +208,7 @@
         <div class="settings-section-body">
           <p class="about-text">解析結果は選択中の帳簿の Google スプレッドシートに保存され、画像は各帳簿フォルダの images に保管されます。履歴タブで同期表示できます。</p>
           <p class="about-text">APIキー・GAS URL・選択中の帳簿は各端末の localStorage にのみ保存されます。</p>
-          <p class="about-text">アプリバージョン: <strong id="aboutVersion">v22</strong>（この数字が上がっていれば最新のデプロイが届いています）</p>
+          <p class="about-text">アプリバージョン: <strong id="aboutVersion">v23</strong>（この数字が上がっていれば最新のデプロイが届いています）</p>
         </div>
       </details>
     </section>
@@ -238,6 +238,42 @@
       <input id="fieldModalNumber" class="field-modal-input hidden" type="number" inputmode="numeric">
       <div class="btn-row" style="margin-top:12px">
         <button type="button" class="btn btn-primary" id="fieldModalOk">確定</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="itemEditModal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-backdrop" id="itemEditBackdrop"></div>
+    <div class="modal-panel modal-panel-field">
+      <div class="modal-header">
+        <span>明細の編集</span>
+        <button type="button" class="btn btn-secondary btn-sm" id="itemEditCancel">取消</button>
+      </div>
+      <div class="form-row">
+        <label for="itemEditName">品目名</label>
+        <textarea id="itemEditName" class="field-modal-input" rows="2"></textarea>
+      </div>
+      <div class="form-grid" style="margin-top:0.5rem">
+        <div class="form-row">
+          <label for="itemEditExcl">税抜（円）</label>
+          <input id="itemEditExcl" class="form-control" type="number" inputmode="numeric" min="0" step="1">
+        </div>
+        <div class="form-row">
+          <label for="itemEditIncl">税込（円）</label>
+          <input id="itemEditIncl" class="form-control" type="number" inputmode="numeric" min="0" step="1">
+        </div>
+      </div>
+      <div class="form-row" style="margin-top:0.5rem">
+        <label for="itemEditTax">税率</label>
+        <select id="itemEditTax" class="form-control"></select>
+      </div>
+      <div class="form-row">
+        <label for="itemEditCat">カテゴリ</label>
+        <select id="itemEditCat" class="form-control"></select>
+      </div>
+      <p class="hint">税込を直すと保存金額になります。税率・税抜を変えると税込は再計算されます。</p>
+      <div class="btn-row" style="margin-top:12px">
+        <button type="button" class="btn btn-primary" id="itemEditOk">確定</button>
       </div>
     </div>
   </div>

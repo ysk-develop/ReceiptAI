@@ -348,164 +348,67 @@ main {
   cursor: pointer;
 }
 
-/* Item cards — stacked label layout (never share a row with width:100% buttons) */
-.item-card {
-  background: #f8fffe;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 0.75rem 0.85rem;
-  margin-bottom: 0.65rem;
-  display: block;
-  width: 100%;
-  box-sizing: border-box;
-}
-
-.item-card-head {
-  display: block;
-  margin-bottom: 0.55rem;
-}
-
-.item-card-title-row {
+/* Compact item list: name (ellipsis) + 修正 + ✕ */
+.item-line {
   display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
   align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  margin-bottom: 0.25rem;
-}
-
-.item-card-label {
-  display: block;
-  font-size: 0.72rem;
-  font-weight: 700;
-  color: var(--text-muted);
-  margin-bottom: 0.15rem;
-}
-
-.item-card-title-row .item-card-label {
-  margin-bottom: 0;
-}
-
-.item-card-name {
-  display: block;
-  width: 100%;
-  margin: 0 0 0.5rem;
-  padding: 0;
-  font-size: 1.05rem;
-  font-weight: 700;
-  color: var(--primary);
-  line-height: 1.4;
-  white-space: normal;
-  word-break: normal;
-  overflow-wrap: break-word;
+  gap: 0.4rem;
+  padding: 0.4rem 0.15rem;
+  margin-bottom: 0.2rem;
+  border-bottom: 1px solid #e0f2f1;
   box-sizing: border-box;
+  width: 100%;
 }
 
-.item-card-name[data-empty="1"] {
+.item-line-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  padding: 0.35rem 0.15rem;
+  border: none;
+  background: transparent;
+  color: var(--primary);
+  font-size: 0.85rem;
+  font-weight: 600;
+  font-family: inherit;
+  line-height: 1.3;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.item-line-name[data-empty="1"] {
   color: var(--text-muted);
   font-weight: 500;
 }
 
-/* Global .btn is width:100% — must override inside cards */
-.item-card .btn,
-.item-card .btn-sm,
-.item-card .item-card-edit {
+.item-line .item-line-edit,
+.item-line .btn-sm {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: auto;
-  max-width: 100%;
-  margin-top: 0;
-  margin-bottom: 0;
   flex: 0 0 auto;
-  padding: 0.4rem 0.75rem;
-  font-size: 0.85rem;
-}
-
-.item-card-lines {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  border-top: 1px solid #e0f2f1;
-}
-
-.item-card-lines li {
-  display: flex;
-  flex-direction: row;
-  flex-wrap: nowrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  padding: 0.55rem 0;
-  border-bottom: 1px solid #f0fdfa;
-}
-
-.item-card-lines li:last-child {
-  border-bottom: none;
-  padding-bottom: 0;
-}
-
-.item-card-line-main {
-  display: flex;
-  flex-direction: row;
-  flex-wrap: nowrap;
-  align-items: center;
-  gap: 0.5rem;
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.item-card-lines .item-card-label {
-  display: block;
-  width: 3.5em;
-  flex: 0 0 3.5em;
-  margin: 0;
-  font-size: 0.8rem;
-}
-
-.item-card-value {
-  flex: 1 1 auto;
-  min-width: 0;
-  font-size: 0.95rem;
-  font-weight: 600;
-  color: var(--text);
-  white-space: normal;
-  word-break: normal;
-  overflow-wrap: break-word;
-}
-
-.item-card-value[data-empty="1"] {
-  color: var(--text-muted);
-  font-weight: 500;
-}
-
-.item-card-value.item-incl {
-  color: var(--success);
-  font-weight: 700;
-}
-
-.item-card-value.item-incl.is-override {
-  color: var(--primary);
-}
-
-.item-card-select {
-  flex: 1 1 auto;
-  min-width: 0;
   width: auto;
-  max-width: 100%;
-  padding: 0.45rem 0.5rem;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  font-size: 0.9rem;
-  background: white;
-  color: var(--text);
-  box-sizing: border-box;
+  margin: 0;
+  padding: 0.35rem 0.55rem;
+  font-size: 0.78rem;
+  white-space: nowrap;
 }
 
-.item-card .btn-icon {
+.item-line .btn-icon {
   flex: 0 0 auto;
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   margin: 0;
+}
+
+.item-line select.hidden,
+.item-line input.hidden {
+  display: none !important;
 }
 
 .total-box {

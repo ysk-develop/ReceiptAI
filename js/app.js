@@ -500,14 +500,14 @@ function refreshRowIncl(row) {
   if (!el) return;
   if (row.dataset.inclOverride !== undefined && row.dataset.inclOverride !== '') {
     const incl = Number(row.dataset.inclOverride) || 0;
-    el.textContent = `${incl.toLocaleString()}`;
+    el.textContent = `${incl.toLocaleString()} 円`;
     el.classList.add('is-override');
     return;
   }
   const excl = Number(row.querySelector('.i-price')?.value) || 0;
   const rateType = normalizeRateType(row.querySelector('.i-tax')?.value);
   const { incl } = calcInclusive(excl, rateType);
-  el.textContent = `${incl.toLocaleString()}`;
+  el.textContent = `${incl.toLocaleString()} 円`;
   el.classList.remove('is-override');
 }
 
@@ -552,38 +552,60 @@ function addItemRow(name = '', price = '', category = '食費', taxRateType = ''
   const tax = getTaxSettings();
   const rateType = normalizeRateType(taxRateType || tax.default_rate_type, tax);
   const row = document.createElement('div');
-  row.className = 'item-row';
+  row.className = 'item-row item-card';
   const exclVal = price === '' || price == null ? '' : Number(price);
   if (inclOverride != null && inclOverride !== '') {
     row.dataset.inclOverride = String(inclOverride);
   }
   row.innerHTML = `
-    <button type="button" class="field-tap i-name-display" aria-label="品名を編集"></button>
-    <input class="i-name hidden" type="hidden" value="${escapeHtml(name)}">
-    <button type="button" class="field-tap i-price-display" aria-label="税抜を編集"></button>
-    <input class="i-price hidden" type="hidden" value="${exclVal}">
-    <select class="i-tax">${taxRateOptionsHtml(rateType)}</select>
-    <button type="button" class="field-tap item-incl" aria-label="税込を編集">0</button>
-    <select class="i-cat">${categoryOptionsHtml(category)}</select>
-    <button type="button" class="btn-icon" aria-label="行を削除">✕</button>
+    <div class="item-card-head">
+      <div class="item-card-name-wrap">
+        <span class="item-card-label">品目</span>
+        <p class="item-card-name i-name-display"></p>
+        <input class="i-name hidden" type="hidden" value="${escapeHtml(name)}">
+      </div>
+      <button type="button" class="btn btn-secondary btn-sm i-edit-name">修正</button>
+      <button type="button" class="btn-icon" aria-label="行を削除">✕</button>
+    </div>
+    <ul class="item-card-lines">
+      <li>
+        <span class="item-card-label">税抜</span>
+        <span class="item-card-value i-price-display"></span>
+        <button type="button" class="btn btn-secondary btn-sm i-edit-price">修正</button>
+        <input class="i-price hidden" type="hidden" value="${exclVal}">
+      </li>
+      <li>
+        <span class="item-card-label">税率</span>
+        <select class="i-tax item-card-select">${taxRateOptionsHtml(rateType)}</select>
+      </li>
+      <li>
+        <span class="item-card-label">税込</span>
+        <span class="item-card-value item-incl">0</span>
+        <button type="button" class="btn btn-secondary btn-sm i-edit-incl">修正</button>
+      </li>
+      <li>
+        <span class="item-card-label">カテゴリ</span>
+        <select class="i-cat item-card-select">${categoryOptionsHtml(category)}</select>
+      </li>
+    </ul>
   `;
 
   const syncNameDisplay = () => {
     const v = row.querySelector('.i-name').value;
-    const btn = row.querySelector('.i-name-display');
-    btn.textContent = v || '品名を入力';
-    btn.dataset.empty = v ? '0' : '1';
+    const el = row.querySelector('.i-name-display');
+    el.textContent = v || '品名を入力';
+    el.dataset.empty = v ? '0' : '1';
   };
   const syncPriceDisplay = () => {
     const v = row.querySelector('.i-price').value;
-    const btn = row.querySelector('.i-price-display');
-    btn.textContent = v === '' ? '税抜' : Number(v).toLocaleString();
-    btn.dataset.empty = v === '' ? '1' : '0';
+    const el = row.querySelector('.i-price-display');
+    el.textContent = v === '' ? '—' : `${Number(v).toLocaleString()} 円`;
+    el.dataset.empty = v === '' ? '1' : '0';
   };
   syncNameDisplay();
   syncPriceDisplay();
 
-  row.querySelector('.i-name-display').addEventListener('click', async () => {
+  row.querySelector('.i-edit-name').addEventListener('click', async () => {
     const next = await openFieldModal({
       title: '品名の編集',
       label: '品名',
@@ -595,7 +617,7 @@ function addItemRow(name = '', price = '', category = '食費', taxRateType = ''
     syncNameDisplay();
   });
 
-  row.querySelector('.i-price-display').addEventListener('click', async () => {
+  row.querySelector('.i-edit-price').addEventListener('click', async () => {
     const next = await openFieldModal({
       title: '税抜金額の編集',
       label: '税抜（円）',
@@ -609,7 +631,7 @@ function addItemRow(name = '', price = '', category = '食費', taxRateType = ''
     calcTotal();
   });
 
-  row.querySelector('.item-incl').addEventListener('click', async () => {
+  row.querySelector('.i-edit-incl').addEventListener('click', async () => {
     const current = rowInclValue(row);
     const next = await openFieldModal({
       title: '税込金額の編集',
@@ -619,8 +641,8 @@ function addItemRow(name = '', price = '', category = '食費', taxRateType = ''
     });
     if (next === null) return;
     const incl = Math.max(0, Math.round(Number(next) || 0));
-    const rateType = normalizeRateType(row.querySelector('.i-tax').value);
-    const { excl } = calcExclusiveFromIncl(incl, rateType);
+    const rateTypeNow = normalizeRateType(row.querySelector('.i-tax').value);
+    const { excl } = calcExclusiveFromIncl(incl, rateTypeNow);
     row.querySelector('.i-price').value = String(excl);
     row.dataset.inclOverride = String(incl);
     syncPriceDisplay();

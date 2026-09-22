@@ -341,43 +341,124 @@ main {
   cursor: pointer;
 }
 
-/* Item rows */
-.item-head {
-  display: grid;
-  grid-template-columns: 1fr 56px 64px 56px 72px 28px;
-  gap: 0.35rem;
-  font-size: 0.75rem;
+/* Item cards (label list — works with large Dynamic Type / SE) */
+.item-card {
+  background: #f8fffe;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.75rem 0.85rem;
+  margin-bottom: 0.65rem;
+}
+
+.item-card-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-bottom: 0.55rem;
+}
+
+.item-card-name-wrap {
+  flex: 1;
+  min-width: 0;
+}
+
+.item-card-label {
+  display: block;
+  font-size: 0.72rem;
   font-weight: 700;
   color: var(--text-muted);
-  margin-bottom: 0.35rem;
-  padding: 0 0.15rem;
+  margin-bottom: 0.15rem;
 }
 
-.item-row {
-  display: grid;
-  grid-template-columns: 1fr 56px 64px 56px 72px 28px;
-  gap: 0.35rem;
+.item-card-name {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--primary);
+  line-height: 1.35;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.item-card-name[data-empty="1"] {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.item-card-lines {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid #e0f2f1;
+}
+
+.item-card-lines li {
+  display: flex;
   align-items: center;
-  margin-bottom: 0.45rem;
+  gap: 0.5rem;
+  padding: 0.45rem 0;
+  border-bottom: 1px solid #f0fdfa;
+  flex-wrap: wrap;
 }
 
-.item-row input,
-.item-row select {
-  width: 100%;
-  padding: 0.5rem 0.25rem;
+.item-card-lines li:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.item-card-lines .item-card-label {
+  display: inline-block;
+  width: 4.2em;
+  flex-shrink: 0;
+  margin: 0;
+  font-size: 0.8rem;
+}
+
+.item-card-value {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text);
+  word-break: break-word;
+}
+
+.item-card-value[data-empty="1"] {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.item-card-value.item-incl {
+  color: var(--success);
+  font-weight: 700;
+}
+
+.item-card-value.item-incl.is-override {
+  color: var(--primary);
+}
+
+.item-card-select {
+  flex: 1;
+  min-width: 7rem;
+  max-width: 100%;
+  padding: 0.45rem 0.5rem;
   border: 1px solid var(--border);
   border-radius: 8px;
-  font-size: 0.8rem;
+  font-size: 0.9rem;
   background: white;
   color: var(--text);
 }
 
-.item-incl {
-  font-size: 0.8rem;
-  font-weight: 700;
-  color: var(--success);
-  text-align: right;
-  padding-right: 2px;
+.item-card .btn-sm {
+  flex-shrink: 0;
+  padding: 0.35rem 0.65rem;
+  font-size: 0.78rem;
+}
+
+.item-card .btn-icon {
+  flex-shrink: 0;
+  margin-top: 0.15rem;
 }
 
 .total-box {
@@ -398,17 +479,6 @@ main {
 }
 
 @media (max-width: 400px) {
-  .item-head,
-  .item-row {
-    grid-template-columns: 1fr 48px 56px 48px 64px 26px;
-  }
-
-  .item-row input,
-  .item-row select {
-    padding: 0.35rem 0.2rem;
-    font-size: 0.72rem;
-  }
-
   .form-grid {
     grid-template-columns: 1fr;
   }
@@ -623,7 +693,10 @@ main {
   min-height: 2.2rem;
   display: flex;
   align-items: center;
-  word-break: break-all;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  word-break: normal;
   font-size: 0.8rem;
   color: var(--text);
   width: 100%;
@@ -639,17 +712,6 @@ main {
 .i-price-display[data-empty="1"],
 #shopNameDisplay[data-empty="1"] {
   color: var(--text-muted);
-}
-
-.item-incl.field-tap {
-  justify-content: flex-end;
-  font-weight: 700;
-  color: var(--success);
-}
-
-.item-incl.is-override {
-  color: var(--primary);
-  border-style: solid !important;
 }
 
 code {

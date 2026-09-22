@@ -13,6 +13,7 @@ import {
   getTaxSettings, saveTaxSettings, calcInclusive, normalizeRateType,
   calcExclusiveFromIncl
 } from './tax.js';
+import { APP_VERSION } from './version.js';
 
 let imageData = null;
 let imageMime = 'image/jpeg';
@@ -1372,7 +1373,16 @@ function registerServiceWorker() {
   }
 }
 
+function applyAppVersion() {
+  const label = `v${APP_VERSION}`;
+  const header = $('appVersion');
+  if (header) header.textContent = label;
+  const about = $('aboutVersion');
+  if (about) about.textContent = label;
+}
+
 function init() {
+  applyAppVersion();
   $('receiptDate').value = todayStr();
   syncShopNameDisplay();
   initTabs();

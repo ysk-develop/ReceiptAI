@@ -1,4 +1,6 @@
-const CACHE_NAME = 'receipt-ai-v21';
+// Keep APP_VERSION in sync with js/version.js
+const APP_VERSION = '22';
+const CACHE_NAME = `receipt-ai-v${APP_VERSION}`;
 const ASSETS = [
   './',
   './index.html',
@@ -10,6 +12,7 @@ const ASSETS = [
   './js/gemini-api.js',
   './js/image-util.js',
   './js/tax.js',
+  './js/version.js',
   './icons/icon-192.png',
   './icons/icon-512.png'
 ];
@@ -31,22 +34,18 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
-  if (event.request.method !== 'GET') return;
-  const url = new URL(event.request.url);
-  if (url.origin !== self.location.origin) return;
-
   event.respondWith(
     caches.match(event.request).then((cached) => {
-      const fetchPromise = fetch(event.request)
-        .then((response) => {
-          if (response.ok) {
-            const clone = response.clone();
+      if (cached) return cached;
+      return fetch(event.request)
+        .then((res) => {
+          const clone = res.clone();
+          if (event.request.method === 'GET' && res.ok) {
             caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
           }
-          return response;
+          return res;
         })
         .catch(() => cached);
-      return cached || fetchPromise;
     })
   );
 });

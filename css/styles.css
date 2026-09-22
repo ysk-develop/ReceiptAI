@@ -408,18 +408,26 @@ main {
   white-space: nowrap;
 }
 
-/* Compact item list: name (ellipsis) + 修正 + ✕ */
+/* Compact item list: name + 修正 + ✕ / amount + category (right, column-aligned) */
 .item-line {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.45rem 0.15rem;
+  margin-bottom: 0.15rem;
+  border-bottom: 1px solid #e0f2f1;
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.item-line-main {
   display: flex;
   flex-direction: row;
   flex-wrap: nowrap;
   align-items: center;
   gap: 0.4rem;
-  padding: 0.4rem 0.15rem;
-  margin-bottom: 0.2rem;
-  border-bottom: 1px solid #e0f2f1;
-  box-sizing: border-box;
   width: 100%;
+  min-width: 0;
 }
 
 .item-line-name {
@@ -464,6 +472,40 @@ main {
   width: 28px;
   height: 28px;
   margin: 0;
+}
+
+.item-line-meta {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 5.75rem 5.75rem;
+  column-gap: 0.5rem;
+  align-items: baseline;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0 0.05rem 0.1rem;
+  cursor: pointer;
+}
+
+.item-line-amount,
+.item-line-category {
+  font-size: 0.78rem;
+  line-height: 1.25;
+  color: var(--text-muted);
+  font-family: inherit;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.item-line-amount {
+  grid-column: 2;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+.item-line-category {
+  grid-column: 3;
+  text-align: left;
 }
 
 .item-line select.hidden,

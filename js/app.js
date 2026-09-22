@@ -666,8 +666,8 @@ function initPaymentMethodSettings() {
   });
 }
 
-function refreshRowIncl(_row) {
-  // Compact list has no inline 税込 display; totals are computed via rowInclValue.
+function refreshRowIncl(row) {
+  row?._syncMetaDisplay?.();
 }
 
 function rowInclValue(row) {
@@ -685,6 +685,7 @@ function calcTotal() {
   document.querySelectorAll('#itemList .item-row').forEach((row) => {
     exclSum += Number(row.querySelector('.i-price')?.value) || 0;
     inclSum += rowInclValue(row);
+    row._syncMetaDisplay?.();
   });
   $('totalPrice').textContent = `${inclSum.toLocaleString()} 円`;
   updateAdjustButton(inclSum);
@@ -777,6 +778,7 @@ function openItemEditModal(row) {
         delete row.dataset.inclOverride;
       }
       row._syncNameDisplay?.();
+      row._syncMetaDisplay?.();
       calcTotal();
       finish(true);
     };
@@ -795,13 +797,19 @@ function addItemRow(name = '', price = '', category = '食費', taxRateType = ''
     row.dataset.inclOverride = String(inclOverride);
   }
   row.innerHTML = `
-    <button type="button" class="item-line-name i-name-display" aria-label="品目を修正"></button>
+    <div class="item-line-main">
+      <button type="button" class="item-line-name i-name-display" aria-label="品目を修正"></button>
+      <button type="button" class="btn btn-secondary btn-sm item-line-edit i-edit">修正</button>
+      <button type="button" class="btn-icon" aria-label="行を削除">✕</button>
+    </div>
+    <div class="item-line-meta" aria-hidden="false">
+      <span class="item-line-amount i-amount-display">0 円</span>
+      <span class="item-line-category i-cat-display"></span>
+    </div>
     <input class="i-name hidden" type="hidden" value="${escapeHtml(name)}">
     <input class="i-price hidden" type="hidden" value="${exclVal}">
     <select class="i-tax hidden">${taxRateOptionsHtml(rateType)}</select>
     <select class="i-cat hidden">${categoryOptionsHtml(category)}</select>
-    <button type="button" class="btn btn-secondary btn-sm item-line-edit i-edit">修正</button>
-    <button type="button" class="btn-icon" aria-label="行を削除">✕</button>
   `;
 
   const syncNameDisplay = () => {
@@ -811,12 +819,26 @@ function addItemRow(name = '', price = '', category = '食費', taxRateType = ''
     el.dataset.empty = v ? '0' : '1';
     el.title = v || '品名を入力';
   };
+  const syncMetaDisplay = () => {
+    const amountEl = row.querySelector('.i-amount-display');
+    const catEl = row.querySelector('.i-cat-display');
+    const incl = rowInclValue(row);
+    const cat = row.querySelector('.i-cat')?.value || 'その他';
+    if (amountEl) amountEl.textContent = `${incl.toLocaleString()} 円`;
+    if (catEl) {
+      catEl.textContent = cat;
+      catEl.title = cat;
+    }
+  };
   row._syncNameDisplay = syncNameDisplay;
+  row._syncMetaDisplay = syncMetaDisplay;
   syncNameDisplay();
+  syncMetaDisplay();
 
   const openEdit = () => openItemEditModal(row);
   row.querySelector('.i-edit').addEventListener('click', openEdit);
   row.querySelector('.i-name-display').addEventListener('click', openEdit);
+  row.querySelector('.item-line-meta')?.addEventListener('click', openEdit);
   row.querySelector('.btn-icon').addEventListener('click', () => {
     row.remove();
     calcTotal();
@@ -909,7 +931,7 @@ function adjustToPrintedTotal() {
       const next = cur + diff;
       row.dataset.inclOverride = String(next);
       row.querySelector('.i-price').value = '0';
-      row.querySelector('.i-price-display').textContent = '0';
+      row._syncMetaDisplay?.();
       adjusted = true;
     }
   });

@@ -93,26 +93,51 @@ def _is_overload_error(exc: BaseException) -> bool:
 
 
 _FALLBACK_MODELS = [
-    "gemini-2.0-flash",
     "gemini-2.5-flash",
+    "gemini-2.0-flash",
     "gemini-1.5-flash",
     "gemini-1.5-flash-8b",
+    "gemini-2.5-flash-lite",
     "gemini-2.0-flash-lite",
     "gemini-1.5-flash-lite",
+    "gemma-4-31b-it",
+    "gemma-4-26b-a4b-it",
 ]
+
+
+def is_allowed_receipt_model(model_id: str) -> bool:
+    """Gemini Flash / Flash-Lite and Gemma 4 26B/31B only."""
+    m = (model_id or "").lower()
+    if not m:
+        return False
+    if re.match(r"^gemma-4-26b\b", m) or re.match(r"^gemma-4-31b\b", m):
+        return True
+    if not m.startswith("gemini-"):
+        return False
+    if "flash" not in m:
+        return False
+    if re.search(r"(^|[-_.])pro([-_.]|$)", m):
+        return False
+    if re.search(
+        r"tts|imagen|banana|omni|robotics|computer[-_]?use|thinking|embedding|aqa|learnlm|image|audio|live|native[-_]?audio",
+        m,
+        re.I,
+    ):
+        return False
+    return bool(re.search(r"flash-lite|flash(?:-|$)", m))
 
 
 def _model_candidates(preferred: str) -> list[str]:
     p = (preferred or "").strip()
     out: list[str] = []
-    if p:
+    if p and is_allowed_receipt_model(p):
         out.append(p)
-    if re.search(r"lite", p, re.I):
+    if p and re.search(r"lite", p, re.I):
         base = re.sub(r"-?lite(-latest)?$", "", p, flags=re.I).rstrip("-")
-        if base and base not in out:
+        if base and is_allowed_receipt_model(base) and base not in out:
             out.append(base)
     for m in _FALLBACK_MODELS:
-        if m not in out:
+        if is_allowed_receipt_model(m) and m not in out:
             out.append(m)
     return out
 
@@ -157,9 +182,23 @@ def fetch_models(api_key: str) -> list[dict[str, str]]:
         if "generateContent" not in methods:
             continue
         mid = name.replace("models/", "")
-        if "gemini" not in mid.lower() and "gemma" not in mid.lower():
+        if not is_allowed_receipt_model(mid):
             continue
         models.append({"id": mid, "name": m.get("displayName") or mid})
+
+    def _rank(mid: str) -> tuple[int, str]:
+        ml = mid.lower()
+        if "flash-lite" in ml:
+            return (20, mid)
+        if "flash" in ml:
+            return (10, mid)
+        if "gemma-4-31b" in ml:
+            return (30, mid)
+        if "gemma-4-26b" in ml:
+            return (31, mid)
+        return (50, mid)
+
+    models.sort(key=lambda x: _rank(x["id"]))
     return models
 
 

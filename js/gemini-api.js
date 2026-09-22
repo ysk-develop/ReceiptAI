@@ -6,6 +6,42 @@ import { CATEGORIES } from './categories.js';
 
 const API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 
+/**
+ * レシート解析で使うモデルのみ許可。
+ * - Gemini x.x Flash / Flash-Lite
+ * - Gemma 4 26B / 31B
+ * Pro・TTS・画像生成・Omni・Robotics・Computer Use 等は除外。
+ */
+export function isAllowedReceiptModel(id) {
+  const m = String(id || '').toLowerCase();
+  if (!m) return false;
+  if (/^gemma-4-26b\b/.test(m) || /^gemma-4-31b\b/.test(m)) return true;
+  if (!m.startsWith('gemini-')) return false;
+  if (!m.includes('flash')) return false;
+  if (
+    /(?:^|[-_.])pro(?:[-_.]|$)/.test(m) ||
+    /tts|imagen|banana|omni|robotics|computer[-_]?use|thinking|embedding|aqa|learnlm|image|audio|live|native[-_]?audio/i.test(
+      m
+    )
+  ) {
+    return false;
+  }
+  return /flash-lite|flash(?:-|$)/.test(m);
+}
+
+function sortReceiptModels(a, b) {
+  const rank = (id) => {
+    const m = String(id || '').toLowerCase();
+    if (/flash-lite/.test(m)) return 20;
+    if (/flash/.test(m)) return 10;
+    if (/gemma-4-31b/.test(m)) return 30;
+    if (/gemma-4-26b/.test(m)) return 31;
+    return 50;
+  };
+  const d = rank(a.id) - rank(b.id);
+  return d !== 0 ? d : String(a.id).localeCompare(String(b.id));
+}
+
 export async function fetchModels(apiKey) {
   const url = `${API_BASE}/models?key=${encodeURIComponent(apiKey)}`;
   const res = await fetch(url);
@@ -21,8 +57,8 @@ export async function fetchModels(apiKey) {
       name: m.displayName || m.name.replace('models/', ''),
       description: m.description || ''
     }))
-    // Gemini API 上の gemini-* / gemma-* を表示（embedding 等は除外）
-    .filter((m) => /^(gemini|gemma)/i.test(m.id));
+    .filter((m) => isAllowedReceiptModel(m.id))
+    .sort(sortReceiptModels);
 }
 
 /**
@@ -263,27 +299,29 @@ function isModelOverloadError(err) {
   return /混雑|503|UNAVAILABLE|high demand/i.test(s);
 }
 
-/** Prefer non-lite siblings when the selected model is overloaded. */
+/** 混雑時フォールバック（許可モデルのみ） */
 const FALLBACK_MODELS = [
-  'gemini-2.0-flash',
   'gemini-2.5-flash',
+  'gemini-2.0-flash',
   'gemini-1.5-flash',
   'gemini-1.5-flash-8b',
+  'gemini-2.5-flash-lite',
   'gemini-2.0-flash-lite',
   'gemini-1.5-flash-lite',
-  'gemini-1.5-flash-lite-latest'
+  'gemma-4-31b-it',
+  'gemma-4-26b-a4b-it'
 ];
 
 function modelCandidates(preferred) {
   const p = String(preferred || '').trim();
   const out = [];
-  if (p) out.push(p);
-  if (/lite/i.test(p)) {
+  if (p && isAllowedReceiptModel(p)) out.push(p);
+  if (p && /lite/i.test(p)) {
     const base = p.replace(/-?lite(-latest)?$/i, '').replace(/-+$/, '');
-    if (base && base !== p) out.push(base);
+    if (base && isAllowedReceiptModel(base) && !out.includes(base)) out.push(base);
   }
   for (const m of FALLBACK_MODELS) {
-    if (!out.includes(m)) out.push(m);
+    if (isAllowedReceiptModel(m) && !out.includes(m)) out.push(m);
   }
   return out;
 }

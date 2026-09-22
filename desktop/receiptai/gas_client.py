@@ -1,4 +1,4 @@
-"""GAS web app client (spreadsheet primary)."""
+"""GAS web app client (spreadsheet primary, multi-book)."""
 
 from __future__ import annotations
 
@@ -48,22 +48,79 @@ def _post(url: str, payload: dict[str, Any], timeout: int = 180) -> dict[str, An
         raise RuntimeError(f"HTTP {e.code}: {err[:400]}") from e
 
 
-def ping(gas_url: str) -> dict[str, Any]:
-    data = _get(gas_url, {"action": "ping"})
+def ping(gas_url: str, *, book_id: str = "") -> dict[str, Any]:
+    params: dict[str, Any] = {"action": "ping"}
+    if book_id:
+        params["book"] = book_id
+    data = _get(gas_url, params)
     if data.get("status") != "ok":
         raise RuntimeError(data.get("message") or "ping failed")
     return data
 
 
-def list_receipts(gas_url: str, *, month: str = "", limit: int = 100) -> list[dict[str, Any]]:
-    data = _get(gas_url, {"action": "list", "month": month, "limit": str(limit)})
+def list_books(gas_url: str) -> list[dict[str, Any]]:
+    data = _get(gas_url, {"action": "books"})
+    if data.get("status") != "ok":
+        raise RuntimeError(data.get("message") or "books failed")
+    return list(data.get("books") or [])
+
+
+def add_book(gas_url: str, name: str) -> dict[str, Any]:
+    data = _get(gas_url, {"action": "book_add", "name": name}, timeout=120)
+    if data.get("status") != "ok":
+        raise RuntimeError(data.get("message") or "book_add failed")
+    return data
+
+
+def rename_book(gas_url: str, book_id: str, name: str) -> dict[str, Any]:
+    data = _get(
+        gas_url,
+        {"action": "book_rename", "id": book_id, "name": name},
+        timeout=120,
+    )
+    if data.get("status") != "ok":
+        raise RuntimeError(data.get("message") or "book_rename failed")
+    return data
+
+
+def delete_book(gas_url: str, book_id: str, *, delete_data: bool = True) -> dict[str, Any]:
+    data = _get(
+        gas_url,
+        {
+            "action": "book_delete",
+            "id": book_id,
+            "delete_data": "1" if delete_data else "0",
+        },
+        timeout=120,
+    )
+    if data.get("status") != "ok":
+        raise RuntimeError(data.get("message") or "book_delete failed")
+    return data
+
+
+def list_receipts(
+    gas_url: str,
+    *,
+    book_id: str = "",
+    month: str = "",
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    data = _get(
+        gas_url,
+        {
+            "action": "list",
+            "book": book_id,
+            "month": month,
+            "limit": str(limit),
+        },
+    )
     if data.get("status") != "ok":
         raise RuntimeError(data.get("message") or "list failed")
     return list(data.get("receipts") or [])
 
 
-def get_receipt(gas_url: str, receipt_id: str) -> dict[str, Any]:
-    data = _get(gas_url, {"action": "receipt", "id": receipt_id})
+def get_receipt(gas_url: str, receipt_id: str, *, book_id: str = "") -> dict[str, Any]:
+    data = _get(gas_url, {"action": "receipt", "book": book_id, "id": receipt_id})
     if data.get("status") != "ok":
         raise RuntimeError(data.get("message") or "receipt failed")
     return data
@@ -82,12 +139,14 @@ def delete_receipt(
     gas_url: str,
     receipt_id: str,
     *,
+    book_id: str = "",
     delete_image: bool = True,
 ) -> dict[str, Any]:
     data = _get(
         gas_url,
         {
             "action": "delete",
+            "book": book_id,
             "id": receipt_id,
             "delete_image": "1" if delete_image else "0",
         },
@@ -101,6 +160,7 @@ def delete_receipt(
 def find_duplicates(
     gas_url: str,
     *,
+    book_id: str = "",
     shop_name: str,
     date: str,
     total_amount: float | int,
@@ -108,6 +168,7 @@ def find_duplicates(
 ) -> list[dict[str, Any]]:
     params: dict[str, Any] = {
         "action": "duplicates",
+        "book": book_id,
         "shop": shop_name,
         "date": date,
         "total": str(int(round(float(total_amount or 0)))),
@@ -122,6 +183,8 @@ def find_duplicates(
 
 def save_receipt(gas_url: str, payload: dict[str, Any]) -> dict[str, Any]:
     body = {"action": "save", **payload}
+    if payload.get("book") or payload.get("book_id"):
+        body["book"] = payload.get("book") or payload.get("book_id")
     data = _post(gas_url, body)
     if data.get("status") == "error":
         raise RuntimeError(data.get("message") or "save failed")

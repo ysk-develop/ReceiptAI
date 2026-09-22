@@ -45,6 +45,7 @@ def init_db(db_path: Path | None = None) -> None:
                 source_file TEXT,
                 source_hash TEXT UNIQUE,
                 cloud_receipt_id TEXT UNIQUE,
+                book_id TEXT DEFAULT '',
                 image_file_id TEXT DEFAULT '',
                 image_view_url TEXT DEFAULT '',
                 created_at TEXT NOT NULL,
@@ -78,11 +79,16 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
         alter.append("ALTER TABLE receipts ADD COLUMN image_file_id TEXT DEFAULT ''")
     if "image_view_url" not in cols:
         alter.append("ALTER TABLE receipts ADD COLUMN image_view_url TEXT DEFAULT ''")
+    if "book_id" not in cols:
+        alter.append("ALTER TABLE receipts ADD COLUMN book_id TEXT DEFAULT ''")
     for sql in alter:
         conn.execute(sql)
     # unique index for cloud id (ignore nulls / empties via partial not available on older sqlite — use unique where possible)
     conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_receipts_cloud_id ON receipts(cloud_receipt_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_receipts_book_id ON receipts(book_id)"
     )
 
 
@@ -98,6 +104,7 @@ def insert_receipt(
     source_file: str | None = None,
     source_hash: str | None = None,
     cloud_receipt_id: str | None = None,
+    book_id: str = "",
     image_file_id: str = "",
     image_view_url: str = "",
     note: str = "",
@@ -124,10 +131,10 @@ def insert_receipt(
             """
             INSERT INTO receipts (
                 shop_name, date, total_amount, source_file, source_hash,
-                cloud_receipt_id, image_file_id, image_view_url,
+                cloud_receipt_id, book_id, image_file_id, image_view_url,
                 created_at, updated_at, note
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 shop_name or "不明",
@@ -136,6 +143,7 @@ def insert_receipt(
                 source_file,
                 source_hash,
                 cloud_receipt_id,
+                book_id or "",
                 image_file_id or "",
                 image_view_url or "",
                 ts,
@@ -163,6 +171,7 @@ def upsert_cloud_receipt(
     date: str,
     items: list[dict[str, Any]],
     *,
+    book_id: str = "",
     image_file_id: str = "",
     image_view_url: str = "",
     db_path: Path | None = None,
@@ -180,10 +189,19 @@ def upsert_cloud_receipt(
                 """
                 UPDATE receipts
                 SET shop_name = ?, date = ?, total_amount = ?,
-                    image_file_id = ?, image_view_url = ?, updated_at = ?
+                    book_id = ?, image_file_id = ?, image_view_url = ?, updated_at = ?
                 WHERE id = ?
                 """,
-                (shop_name, date, total, image_file_id or "", image_view_url or "", ts, rid),
+                (
+                    shop_name,
+                    date,
+                    total,
+                    book_id or "",
+                    image_file_id or "",
+                    image_view_url or "",
+                    ts,
+                    rid,
+                ),
             )
             conn.execute("DELETE FROM items WHERE receipt_id = ?", (rid,))
             for item in items:
@@ -201,12 +219,22 @@ def upsert_cloud_receipt(
         cur = conn.execute(
             """
             INSERT INTO receipts (
-                shop_name, date, total_amount, cloud_receipt_id,
+                shop_name, date, total_amount, cloud_receipt_id, book_id,
                 image_file_id, image_view_url, created_at, updated_at, note
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, '')
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '')
             """,
-            (shop_name, date, total, cloud_receipt_id, image_file_id or "", image_view_url or "", ts, ts),
+            (
+                shop_name,
+                date,
+                total,
+                cloud_receipt_id,
+                book_id or "",
+                image_file_id or "",
+                image_view_url or "",
+                ts,
+                ts,
+            ),
         )
         rid = int(cur.lastrowid)
         for item in items:
@@ -283,6 +311,7 @@ def delete_by_cloud_id(cloud_receipt_id: str, db_path: Path | None = None) -> in
 def prune_cloud_receipts(
     keep_cloud_ids: set[str] | list[str],
     *,
+    book_id: str = "",
     year_month: str | None = None,
     db_path: Path | None = None,
 ) -> int:
@@ -291,18 +320,31 @@ def prune_cloud_receipts(
     but are no longer present in keep_cloud_ids.
 
     If year_month is set (YYYY-MM), only prune rows whose date falls in that month.
+    If book_id is set, only prune that book's rows.
     Local-only rows (no cloud_receipt_id) are never deleted.
     """
     keep = {str(x) for x in keep_cloud_ids if x}
     ym = (year_month or "").strip()
+    bid = (book_id or "").strip()
     with get_conn(db_path) as conn:
-        rows = conn.execute(
-            """
-            SELECT id, cloud_receipt_id, date FROM receipts
-            WHERE cloud_receipt_id IS NOT NULL
-              AND cloud_receipt_id != ''
-            """
-        ).fetchall()
+        if bid:
+            rows = conn.execute(
+                """
+                SELECT id, cloud_receipt_id, date FROM receipts
+                WHERE cloud_receipt_id IS NOT NULL
+                  AND cloud_receipt_id != ''
+                  AND book_id = ?
+                """,
+                (bid,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT id, cloud_receipt_id, date FROM receipts
+                WHERE cloud_receipt_id IS NOT NULL
+                  AND cloud_receipt_id != ''
+                """
+            ).fetchall()
 
         deleted = 0
         for row in rows:
@@ -366,23 +408,25 @@ def find_local_duplicates(
 def list_receipts(
     *,
     year_month: str | None = None,
+    book_id: str | None = None,
     db_path: Path | None = None,
 ) -> list[dict[str, Any]]:
+    bid = (book_id or "").strip()
     with get_conn(db_path) as conn:
+        clauses: list[str] = []
+        params: list[Any] = []
         if year_month:
             ym = year_month.strip().replace("/", "-")[:7]
-            rows = conn.execute(
-                """
-                SELECT * FROM receipts
-                WHERE replace(substr(date, 1, 7), '/', '-') = ?
-                ORDER BY date DESC, id DESC
-                """,
-                (ym,),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT * FROM receipts ORDER BY date DESC, id DESC"
-            ).fetchall()
+            clauses.append("replace(substr(date, 1, 7), '/', '-') = ?")
+            params.append(ym)
+        if bid:
+            clauses.append("book_id = ?")
+            params.append(bid)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        rows = conn.execute(
+            f"SELECT * FROM receipts{where} ORDER BY date DESC, id DESC",
+            params,
+        ).fetchall()
         return [dict(r) for r in rows]
 
 
@@ -400,88 +444,121 @@ def get_receipt(receipt_id: int, db_path: Path | None = None) -> dict[str, Any] 
         return data
 
 
-def list_months(db_path: Path | None = None) -> list[str]:
+def list_months(book_id: str | None = None, db_path: Path | None = None) -> list[str]:
+    bid = (book_id or "").strip()
     with get_conn(db_path) as conn:
-        rows = conn.execute(
-            """
-            SELECT DISTINCT replace(substr(date, 1, 7), '/', '-') AS ym
-            FROM receipts
-            WHERE length(date) >= 7
-            ORDER BY ym DESC
-            """
-        ).fetchall()
+        if bid:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT replace(substr(date, 1, 7), '/', '-') AS ym
+                FROM receipts
+                WHERE length(date) >= 7 AND book_id = ?
+                ORDER BY ym DESC
+                """,
+                (bid,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT replace(substr(date, 1, 7), '/', '-') AS ym
+                FROM receipts
+                WHERE length(date) >= 7
+                ORDER BY ym DESC
+                """
+            ).fetchall()
         return [r["ym"] for r in rows if r["ym"]]
 
 
 def category_totals(
     year_month: str | None = None,
+    book_id: str | None = None,
     db_path: Path | None = None,
 ) -> list[tuple[str, float]]:
+    bid = (book_id or "").strip()
     with get_conn(db_path) as conn:
+        clauses: list[str] = []
+        params: list[Any] = []
         if year_month:
             ym = year_month.strip().replace("/", "-")[:7]
+            clauses.append("replace(substr(r.date, 1, 7), '/', '-') = ?")
+            params.append(ym)
+        if bid:
+            clauses.append("r.book_id = ?")
+            params.append(bid)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        rows = conn.execute(
+            f"""
+            SELECT i.category, SUM(i.price) AS total
+            FROM items i
+            JOIN receipts r ON r.id = i.receipt_id
+            {where}
+            GROUP BY i.category
+            ORDER BY total DESC
+            """,
+            params,
+        ).fetchall()
+        return [(str(r["category"]), float(r["total"] or 0)) for r in rows]
+
+
+def monthly_totals(
+    book_id: str | None = None, db_path: Path | None = None
+) -> list[tuple[str, float]]:
+    bid = (book_id or "").strip()
+    with get_conn(db_path) as conn:
+        if bid:
             rows = conn.execute(
                 """
-                SELECT i.category, SUM(i.price) AS total
-                FROM items i
-                JOIN receipts r ON r.id = i.receipt_id
-                WHERE replace(substr(r.date, 1, 7), '/', '-') = ?
-                GROUP BY i.category
-                ORDER BY total DESC
+                SELECT replace(substr(date, 1, 7), '/', '-') AS ym, SUM(total_amount) AS total
+                FROM receipts
+                WHERE length(date) >= 7 AND book_id = ?
+                GROUP BY ym
+                ORDER BY ym
                 """,
-                (ym,),
+                (bid,),
             ).fetchall()
         else:
             rows = conn.execute(
                 """
-                SELECT category, SUM(price) AS total
-                FROM items
-                GROUP BY category
-                ORDER BY total DESC
+                SELECT replace(substr(date, 1, 7), '/', '-') AS ym, SUM(total_amount) AS total
+                FROM receipts
+                WHERE length(date) >= 7
+                GROUP BY ym
+                ORDER BY ym
                 """
             ).fetchall()
-        return [(r["category"], float(r["total"] or 0)) for r in rows]
-
-
-def monthly_totals(db_path: Path | None = None) -> list[tuple[str, float]]:
-    with get_conn(db_path) as conn:
-        rows = conn.execute(
-            """
-            SELECT replace(substr(date, 1, 7), '/', '-') AS ym, SUM(total_amount) AS total
-            FROM receipts
-            WHERE length(date) >= 7
-            GROUP BY ym
-            ORDER BY ym
-            """
-        ).fetchall()
         return [(r["ym"], float(r["total"] or 0)) for r in rows]
 
 
-def export_csv(path: Path, year_month: str | None = None, db_path: Path | None = None) -> int:
+def export_csv(
+    path: Path,
+    year_month: str | None = None,
+    book_id: str | None = None,
+    db_path: Path | None = None,
+) -> int:
     import csv
 
+    bid = (book_id or "").strip()
     with get_conn(db_path) as conn:
+        clauses: list[str] = []
+        params: list[Any] = []
         if year_month:
             ym = year_month.strip().replace("/", "-")[:7]
-            rows = conn.execute(
-                """
-                SELECT r.date, r.shop_name, i.name, i.price, i.category, r.id
-                FROM items i
-                JOIN receipts r ON r.id = i.receipt_id
-                WHERE replace(substr(r.date, 1, 7), '/', '-') = ?
-                ORDER BY r.date, r.id, i.id
-                """,
-                (ym,),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                """
-                SELECT r.date, r.shop_name, i.name, i.price, i.category, r.id
-                FROM items i
-                JOIN receipts r ON r.id = i.receipt_id
-                ORDER BY r.date, r.id, i.id
-                """
-            ).fetchall()
+            clauses.append("replace(substr(r.date, 1, 7), '/', '-') = ?")
+            params.append(ym)
+        if bid:
+            clauses.append("r.book_id = ?")
+            params.append(bid)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        rows = conn.execute(
+            f"""
+            SELECT r.date, r.shop_name, i.name, i.price, i.category, r.id
+            FROM items i
+            JOIN receipts r ON r.id = i.receipt_id
+            {where}
+            ORDER BY r.date, r.id, i.id
+            """,
+            params,
+        ).fetchall()
 
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8-sig", newline="") as f:

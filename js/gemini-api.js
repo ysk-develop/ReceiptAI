@@ -324,14 +324,20 @@ export function gasJsonp(gasUrl, params = {}, timeoutMs = 60000) {
   });
 }
 
-export async function pingGas(gasUrl) {
+export async function pingGas(gasUrl, { bookId = '' } = {}) {
+  const params = { action: 'ping' };
+  if (bookId) params.book = bookId;
   const checkUrl = `${normalizeGasUrl(gasUrl)}?action=ping`;
   try {
-    const data = await gasJsonp(gasUrl, { action: 'ping' });
+    const data = await gasJsonp(gasUrl, params);
     if (data.status === 'ok') {
+      const bookName = data.book?.name || '';
+      const n = (data.books || []).length;
       return {
         ok: true,
-        message: `接続OK / シート: ${data.spreadsheetUrl || data.sheetName || 'ReceiptAI'}`,
+        message: bookName
+          ? `接続OK / 帳簿: ${bookName}（全${n}件）`
+          : `接続OK / 帳簿 ${n} 件${data.spreadsheetUrl ? `\n${data.spreadsheetUrl}` : ''}`,
         data,
         checkUrl
       };
@@ -348,9 +354,46 @@ export async function pingGas(gasUrl) {
   }
 }
 
-export async function listReceipts(gasUrl, { month = '', limit = 50 } = {}) {
+export async function listBooks(gasUrl) {
+  const data = await gasJsonp(gasUrl, { action: 'books' });
+  if (data.status !== 'ok') throw new Error(data.message || '帳簿一覧の取得に失敗');
+  return data.books || [];
+}
+
+export async function addBook(gasUrl, name) {
+  const data = await gasJsonp(gasUrl, { action: 'book_add', name: name || '' }, 90000);
+  if (data.status !== 'ok') throw new Error(data.message || '帳簿の追加に失敗');
+  return data;
+}
+
+export async function renameBook(gasUrl, bookId, name) {
+  const data = await gasJsonp(
+    gasUrl,
+    { action: 'book_rename', id: bookId, name: name || '' },
+    90000
+  );
+  if (data.status !== 'ok') throw new Error(data.message || '帳簿の改名に失敗');
+  return data;
+}
+
+export async function deleteBook(gasUrl, bookId, { deleteData = true } = {}) {
+  const data = await gasJsonp(
+    gasUrl,
+    {
+      action: 'book_delete',
+      id: bookId,
+      delete_data: deleteData ? '1' : '0'
+    },
+    90000
+  );
+  if (data.status !== 'ok') throw new Error(data.message || '帳簿の削除に失敗');
+  return data;
+}
+
+export async function listReceipts(gasUrl, { bookId = '', month = '', limit = 50 } = {}) {
   const data = await gasJsonp(gasUrl, {
     action: 'list',
+    book: bookId || '',
     month: month || '',
     limit: String(limit)
   });
@@ -358,17 +401,22 @@ export async function listReceipts(gasUrl, { month = '', limit = 50 } = {}) {
   return data.receipts || [];
 }
 
-export async function getReceipt(gasUrl, receiptId) {
-  const data = await gasJsonp(gasUrl, { action: 'receipt', id: receiptId });
+export async function getReceipt(gasUrl, receiptId, { bookId = '' } = {}) {
+  const data = await gasJsonp(gasUrl, {
+    action: 'receipt',
+    book: bookId || '',
+    id: receiptId
+  });
   if (data.status !== 'ok') throw new Error(data.message || '取得失敗');
   return data;
 }
 
 /** Physically delete receipt rows (and unused Drive image) via GAS. */
-export async function deleteReceipt(gasUrl, receiptId, { deleteImage = true } = {}) {
+export async function deleteReceipt(gasUrl, receiptId, { bookId = '', deleteImage = true } = {}) {
   if (!receiptId) throw new Error('削除対象のIDがありません');
   const data = await gasJsonp(gasUrl, {
     action: 'delete',
+    book: bookId || '',
     id: receiptId,
     delete_image: deleteImage ? '1' : '0'
   }, 90000);
@@ -379,10 +427,11 @@ export async function deleteReceipt(gasUrl, receiptId, { deleteImage = true } = 
 /** Find likely duplicate receipts (shop + date + total [+ item count]). */
 export async function findDuplicateReceipts(
   gasUrl,
-  { shop_name, date, total_amount, item_count = null } = {}
+  { bookId = '', shop_name, date, total_amount, item_count = null } = {}
 ) {
   const params = {
     action: 'duplicates',
+    book: bookId || '',
     shop: shop_name || '',
     date: date || '',
     total: String(Math.round(Number(total_amount) || 0))
@@ -418,6 +467,9 @@ export async function fetchReceiptImage(gasUrl, fileId) {
 export async function sendToGas(gasUrl, payload) {
   const url = normalizeGasUrl(gasUrl);
   const body = { action: 'save', ...payload };
+  if (payload.book || payload.book_id) {
+    body.book = payload.book || payload.book_id;
+  }
   const bodyText = JSON.stringify(body);
 
   try {

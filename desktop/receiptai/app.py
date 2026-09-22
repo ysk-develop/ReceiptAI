@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMainWindow,
@@ -174,6 +175,45 @@ class MainWindow(QMainWindow):
         self.status.showMessage(f"DB: {DB_PATH}")
 
         self.refresh_all()
+        if self.cfg.get("gas_url"):
+            try:
+                self.refresh_books(silent=True)
+            except Exception:  # noqa: BLE001
+                pass
+
+    def current_book_id(self) -> str:
+        if hasattr(self, "book_combo") and self.book_combo.count() > 0:
+            data = self.book_combo.currentData()
+            if data:
+                return str(data)
+        return str(self.cfg.get("book_id") or "")
+
+    def _populate_book_combo(self, books: list[dict], preferred: str = "") -> None:
+        if not hasattr(self, "book_combo"):
+            return
+        want = preferred or str(self.cfg.get("book_id") or "")
+        self.book_combo.blockSignals(True)
+        self.book_combo.clear()
+        matched = False
+        for b in books:
+            bid = str(b.get("id") or "")
+            name = str(b.get("name") or bid)
+            self.book_combo.addItem(name, bid)
+            if bid and bid == want:
+                self.book_combo.setCurrentIndex(self.book_combo.count() - 1)
+                matched = True
+        if books and not matched:
+            self.book_combo.setCurrentIndex(0)
+        if not books:
+            self.book_combo.addItem("（接続テストで一覧取得）", "")
+        self.book_combo.blockSignals(False)
+        self.cfg["book_id"] = self.current_book_id()
+        save_config(self.cfg)
+
+    def _on_book_changed(self, _index: int = 0) -> None:
+        self.cfg["book_id"] = self.current_book_id()
+        save_config(self.cfg)
+        self.refresh_all()
 
     def _build_header(self) -> QFrame:
         bar = QFrame()
@@ -258,7 +298,8 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(page, "一覧")
 
     def refresh_months(self) -> None:
-        months = db.list_months()
+        book_id = self.current_book_id()
+        months = db.list_months(book_id=book_id or None)
         current = self.month_combo.currentText()
         self.month_combo.blockSignals(True)
         self.month_combo.clear()
@@ -280,7 +321,8 @@ class MainWindow(QMainWindow):
     def refresh_list(self) -> None:
         ym = self.month_combo.currentText()
         year_month = None if ym == "すべて" else ym
-        rows = db.list_receipts(year_month=year_month)
+        book_id = self.current_book_id()
+        rows = db.list_receipts(year_month=year_month, book_id=book_id or None)
         total = sum(float(r["total_amount"] or 0) for r in rows)
         suffix = f"（{ym}）" if year_month else ""
         self.summary_label.setText(f"{len(rows)} 件 / 合計 {total:,.0f} 円{suffix}")
@@ -636,11 +678,14 @@ class MainWindow(QMainWindow):
 
         ym = self.chart_month_combo.currentText()
         year_month = None if ym == "すべて" else ym
+        book_id = self.current_book_id() or None
         try:
             pie = charts.canvas_from_figure(
-                charts.make_category_pie(db.category_totals(year_month))
+                charts.make_category_pie(db.category_totals(year_month, book_id=book_id))
             )
-            bar = charts.canvas_from_figure(charts.make_monthly_bars(db.monthly_totals()))
+            bar = charts.canvas_from_figure(
+                charts.make_monthly_bars(db.monthly_totals(book_id=book_id))
+            )
         except Exception as exc:  # noqa: BLE001
             # Never block app startup / tab switch on chart errors
             err = QLabel(f"グラフを描画できませんでした\n{exc}")
@@ -869,6 +914,32 @@ class MainWindow(QMainWindow):
         grow.addWidget(test_gas)
         v.addLayout(grow)
 
+        _hint("帳簿（選択は記憶されます。追加・改名・削除もここから）")
+        brow = QHBoxLayout()
+        brow.setSpacing(8)
+        self.book_combo = QComboBox()
+        _fix_edit(self.book_combo)
+        brow.addWidget(self.book_combo, 1)
+        refresh_books = _fix_btn(_btn("一覧取得", "SecondaryButton"))
+        refresh_books.clicked.connect(self.refresh_books)
+        brow.addWidget(refresh_books)
+        v.addLayout(brow)
+        self.book_combo.currentIndexChanged.connect(self._on_book_changed)
+
+        bops = QHBoxLayout()
+        bops.setSpacing(8)
+        add_book = _fix_btn(_btn("追加", "SecondaryButton"))
+        add_book.clicked.connect(self.add_book)
+        rename_book = _fix_btn(_btn("名前変更", "SecondaryButton"))
+        rename_book.clicked.connect(self.rename_book)
+        del_book = _fix_btn(_btn("削除", "DangerButton"))
+        del_book.clicked.connect(self.delete_book)
+        bops.addWidget(add_book)
+        bops.addWidget(rename_book)
+        bops.addWidget(del_book)
+        bops.addStretch(1)
+        v.addLayout(bops)
+
         clear_btn = _fix_btn(_btn("ローカル一覧を全消去", "DangerButton"))
         clear_btn.clicked.connect(self.clear_local_db)
         v.addWidget(clear_btn, alignment=Qt.AlignmentFlag.AlignLeft)
@@ -971,6 +1042,7 @@ class MainWindow(QMainWindow):
 
     def save_settings(self) -> None:
         self.cfg["gas_url"] = self.gas_edit.text().strip()
+        self.cfg["book_id"] = self.current_book_id()
         self.cfg["sync_folder"] = self.sync_edit.text().strip()
         self.cfg["gemini_api_key"] = self.api_edit.text().strip()
         self.cfg["gemini_model"] = self.model_combo.currentText().strip()
@@ -983,19 +1055,112 @@ class MainWindow(QMainWindow):
         self._recalc_total()
         QMessageBox.information(self, "設定", "保存しました")
 
+    def refresh_books(self, silent: bool = False) -> None:
+        url = self.gas_edit.text().strip() or self.cfg.get("gas_url") or ""
+        if not url:
+            if not silent:
+                QMessageBox.warning(self, "帳簿", "先に GAS URL を入力してください")
+            return
+        try:
+            books = gas_client.list_books(url)
+            self._populate_book_combo(books, preferred=str(self.cfg.get("book_id") or ""))
+            if not silent:
+                QMessageBox.information(self, "帳簿", f"{len(books)} 件取得しました")
+        except Exception as exc:  # noqa: BLE001
+            if not silent:
+                QMessageBox.critical(self, "帳簿", str(exc))
+            raise
+
+    def add_book(self) -> None:
+        url = self.gas_edit.text().strip() or self.cfg.get("gas_url") or ""
+        if not url:
+            QMessageBox.warning(self, "帳簿", "先に GAS URL を入力してください")
+            return
+        name, ok = QInputDialog.getText(self, "帳簿を追加", "新しい帳簿名:")
+        if not ok:
+            return
+        name = name.strip()
+        if not name:
+            QMessageBox.warning(self, "帳簿", "名前を入力してください")
+            return
+        try:
+            data = gas_client.add_book(url, name)
+            books = list(data.get("books") or [])
+            new_id = str((data.get("book") or {}).get("id") or "")
+            self._populate_book_combo(books, preferred=new_id)
+            self.refresh_all()
+            QMessageBox.information(self, "帳簿", f"「{name}」を追加しました")
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, "帳簿", str(exc))
+
+    def rename_book(self) -> None:
+        url = self.gas_edit.text().strip() or self.cfg.get("gas_url") or ""
+        book_id = self.current_book_id()
+        if not url or not book_id:
+            QMessageBox.warning(self, "帳簿", "GAS URL と帳簿を選んでください")
+            return
+        current = self.book_combo.currentText()
+        name, ok = QInputDialog.getText(self, "名前変更", "新しい帳簿名:", text=current)
+        if not ok:
+            return
+        name = name.strip()
+        if not name:
+            QMessageBox.warning(self, "帳簿", "名前を入力してください")
+            return
+        try:
+            data = gas_client.rename_book(url, book_id, name)
+            self._populate_book_combo(list(data.get("books") or []), preferred=book_id)
+            QMessageBox.information(self, "帳簿", f"「{name}」に変更しました")
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, "帳簿", str(exc))
+
+    def delete_book(self) -> None:
+        url = self.gas_edit.text().strip() or self.cfg.get("gas_url") or ""
+        book_id = self.current_book_id()
+        if not url or not book_id:
+            QMessageBox.warning(self, "帳簿", "GAS URL と帳簿を選んでください")
+            return
+        current = self.book_combo.currentText()
+        reply = QMessageBox.question(
+            self,
+            "帳簿の削除",
+            f"「{current}」を削除しますか？\nDrive のフォルダ・シート・画像もゴミ箱へ移します。\n"
+            "（少なくとも1つは残す必要があります）",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            data = gas_client.delete_book(url, book_id, delete_data=True)
+            self._populate_book_combo(list(data.get("books") or []))
+            self.refresh_all()
+            QMessageBox.information(self, "帳簿", f"「{current}」を削除しました")
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, "帳簿", str(exc))
+
     def test_gas(self) -> None:
         url = self.gas_edit.text().strip() or self.cfg.get("gas_url") or ""
         if not url:
             QMessageBox.warning(self, "GAS", "URLを入力してください")
             return
         try:
-            data = gas_client.ping(url)
+            book_id = self.current_book_id()
+            data = gas_client.ping(url, book_id=book_id)
             self.cfg["gas_url"] = url
+            if data.get("books"):
+                self._populate_book_combo(
+                    list(data.get("books") or []), preferred=book_id
+                )
             save_config(self.cfg)
+            book = data.get("book") or {}
             QMessageBox.information(
                 self,
                 "接続OK",
-                f"シート: {data.get('spreadsheetUrl') or data.get('sheetName')}\n画像: {data.get('imagesFolderUrl') or ''}",
+                f"帳簿: {book.get('name') or '(未選択)'}\n"
+                f"全 {len(data.get('books') or [])} 件\n"
+                f"シート: {data.get('spreadsheetUrl') or ''}\n"
+                f"画像: {data.get('imagesFolderUrl') or ''}",
             )
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, "接続失敗", str(exc))
@@ -1041,10 +1206,13 @@ class MainWindow(QMainWindow):
             return
 
         gas_url = self.cfg.get("gas_url") or self.gas_edit.text().strip()
+        book_id = self.current_book_id()
         sheet_msg = ""
         if cloud_id and gas_url:
             try:
-                result = gas_client.delete_receipt(gas_url, cloud_id, delete_image=True)
+                result = gas_client.delete_receipt(
+                    gas_url, cloud_id, book_id=book_id, delete_image=True
+                )
                 sheet_msg = (
                     f"シート: {result.get('deleted_rows', 0)} 行削除"
                     + (
@@ -1126,12 +1294,19 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "同期", "設定でGAS URLを保存してください")
             self.tabs.setCurrentIndex(4)
             return
+        book_id = self.current_book_id()
+        if not book_id:
+            QMessageBox.warning(self, "同期", "設定で帳簿を選択してください")
+            self.tabs.setCurrentIndex(4)
+            return
         ym = self.month_combo.currentText()
         month = "" if ym == "すべて" else ym
         self.status.showMessage("シートから同期中…")
 
         def work() -> dict:
-            return sheets_sync.sync_from_sheet(url, month=month, limit=200)
+            return sheets_sync.sync_from_sheet(
+                url, book_id=book_id, month=month, limit=200
+            )
 
         worker = Worker(work)
         worker.finished_ok.connect(self._sync_done)
@@ -1159,11 +1334,17 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "保存", "設定でGAS URLを保存してください")
             self.tabs.setCurrentIndex(4)
             return
+        book_id = self.current_book_id()
+        if not book_id:
+            QMessageBox.warning(self, "保存", "設定で帳簿を選択してください")
+            self.tabs.setCurrentIndex(4)
+            return
         items = self._collect_items()
         if not items:
             QMessageBox.warning(self, "保存", "先に解析するか明細を入力してください")
             return
         payload = {
+            "book": book_id,
             "shop_name": self.shop_edit.text().strip() or "不明",
             "date": self.date_edit.text().strip() or date.today().isoformat(),
             "total_amount": sum(i["price"] for i in items),
@@ -1176,6 +1357,7 @@ class MainWindow(QMainWindow):
         try:
             sheet_dupes = gas_client.find_duplicates(
                 url,
+                book_id=book_id,
                 shop_name=payload["shop_name"],
                 date=payload["date"],
                 total_amount=payload["total_amount"],
@@ -1233,6 +1415,7 @@ class MainWindow(QMainWindow):
                     payload["shop_name"],
                     payload["date"],
                     items,
+                    book_id=book_id,
                     image_file_id=str(result.get("image_file_id") or ""),
                     image_view_url=str(result.get("image_view_url") or ""),
                 )
@@ -1288,7 +1471,11 @@ class MainWindow(QMainWindow):
         )
         if not path:
             return
-        n = db.export_csv(Path(path), year_month=year_month)
+        n = db.export_csv(
+            Path(path),
+            year_month=year_month,
+            book_id=self.current_book_id() or None,
+        )
         QMessageBox.information(self, "CSV", f"{n} 行を出力しました")
 
     def refresh_all(self) -> None:

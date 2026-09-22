@@ -1,20 +1,23 @@
 /**
  * ReceiptAI — Google Apps Script
- * 正本: スプレッドシート / 画像: Drive(images) / API: doPost + doGet(JSONP可)
+ * 正本: 帳簿ごとのスプレッドシート / 画像: 各帳簿フォルダ/images
+ * API: doPost + doGet(JSONP可)
  *
  * 【セットアップ】
  * 1. このコードを貼付け（同じフォルダに appsscript.json も配置）
- * 2. 初回はエディタで setupReceiptAI() を実行（シート・フォルダ作成＋権限許可）
+ * 2. 初回はエディタで setupReceiptAI() を実行（帳簿・シート・フォルダ作成＋権限許可）
  * 3. デプロイ → ウェブアプリ（実行:自分 / アクセス:全員）
  * 4. /exec URL をスマホ・PCアプリに設定
  * 5. コード変更後は必ず「新バージョン」で再デプロイ
- * 6. 「openById の権限がありません」が出たら setupReceiptAI を再実行して権限を再許可し、新バージョン再デプロイ
  *
- * 任意: SPREADSHEET_ID / FOLDER_ID を固定したい場合のみ下に記入
+ * 任意: FOLDER_ID をルート固定したい場合のみ下に記入
+ * （旧 SPREADSHEET_ID 単一運用は setup 時に「テスト用」へ移行）
  */
-var SPREADSHEET_ID = '';
 var FOLDER_ID = '';
+var LEGACY_SPREADSHEET_ID = ''; // 旧単一シート移行用（通常は空でOK）
 var SHEET_NAME = 'receipts';
+var BOOKS_PROP = 'BOOKS_V1';
+var DEFAULT_BOOK_NAMES = ['テスト用', 'あーちゃん用'];
 var HEADERS = [
   'created_at',
   'receipt_id',
@@ -36,7 +39,16 @@ function doPost(e) {
       return respond_(e, saveReceipt_(data));
     }
     if (action === 'delete') {
-      return respond_(e, deleteReceipt_(data.id || data.receipt_id, data.delete_image !== false));
+      return respond_(e, deleteReceipt_(data.book || data.book_id || '', data.id || data.receipt_id, data.delete_image !== false));
+    }
+    if (action === 'book_add') {
+      return respond_(e, addBook_(data.name || ''));
+    }
+    if (action === 'book_rename') {
+      return respond_(e, renameBook_(data.id || data.book || data.book_id || '', data.name || ''));
+    }
+    if (action === 'book_delete') {
+      return respond_(e, deleteBook_(data.id || data.book || data.book_id || '', data.delete_data !== false));
     }
     return respond_(e, { status: 'error', message: 'unknown action: ' + action });
   } catch (err) {
@@ -55,19 +67,29 @@ function doGet(e) {
   try {
     var p = (e && e.parameter) || {};
     var action = p.action || (p.ping === '1' ? 'ping' : 'ping');
+    var bookId = p.book || p.book_id || '';
     var result;
     if (action === 'ping') {
-      result = ping_();
+      result = ping_(bookId);
+    } else if (action === 'books') {
+      result = listBooks_();
+    } else if (action === 'book_add') {
+      result = addBook_(p.name || '');
+    } else if (action === 'book_rename') {
+      result = renameBook_(p.id || bookId, p.name || '');
+    } else if (action === 'book_delete') {
+      result = deleteBook_(p.id || bookId, p.delete_data !== '0');
     } else if (action === 'list') {
-      result = listReceipts_(p.month || '', Number(p.limit || 50));
+      result = listReceipts_(bookId, p.month || '', Number(p.limit || 50));
     } else if (action === 'receipt') {
-      result = getReceipt_(p.id || '');
+      result = getReceipt_(bookId, p.id || '');
     } else if (action === 'image') {
       result = getImageMeta_(p.id || '', p.data === '1' || p.data === 'true');
     } else if (action === 'delete') {
-      result = deleteReceipt_(p.id || '', p.delete_image !== '0');
+      result = deleteReceipt_(bookId, p.id || '', p.delete_image !== '0');
     } else if (action === 'duplicates') {
       result = findDuplicates_(
+        bookId,
         p.shop || p.shop_name || '',
         p.date || '',
         Number(p.total || p.total_amount || 0),
@@ -84,18 +106,26 @@ function doGet(e) {
 
 /** 初回セットアップ（エディタから実行） */
 function setupReceiptAI() {
-  var folder = getRootFolder_();
-  var images = getImagesFolder_();
-  var ss = getSpreadsheet_();
-  var sheet = getSheet_();
-  Logger.log('folder=' + folder.getUrl());
-  Logger.log('images=' + images.getUrl());
-  Logger.log('spreadsheet=' + ss.getUrl());
-  Logger.log('sheet=' + sheet.getName() + ' rows=' + sheet.getLastRow());
+  var root = getRootFolder_();
+  var books = ensureBooksInitialized_();
+  Logger.log('root=' + root.getUrl());
+  for (var i = 0; i < books.length; i++) {
+    var b = books[i];
+    var sheet = getSheetForBook_(b);
+    Logger.log(
+      'book=' + b.name + ' id=' + b.id +
+      ' folder=' + DriveApp.getFolderById(b.folderId).getUrl() +
+      ' sheet=' + SpreadsheetApp.openById(b.spreadsheetId).getUrl() +
+      ' rows=' + sheet.getLastRow()
+    );
+  }
 }
 
 function testWrite() {
+  var books = ensureBooksInitialized_();
+  var book = books[0];
   var result = saveReceipt_({
+    book: book.id,
     shop_name: 'テスト店',
     date: Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd'),
     total_amount: 100,
@@ -104,24 +134,108 @@ function testWrite() {
   Logger.log(JSON.stringify(result));
 }
 
-function ping_() {
-  var folder = getRootFolder_();
-  var images = getImagesFolder_();
-  var ss = getSpreadsheet_();
-  return {
+function ping_(bookId) {
+  var books = ensureBooksInitialized_();
+  var out = {
     status: 'ok',
     app: 'ReceiptAI',
-    mode: 'spreadsheet',
-    folderName: folder.getName(),
-    folderUrl: folder.getUrl(),
-    imagesFolderUrl: images.getUrl(),
-    spreadsheetUrl: ss.getUrl(),
-    spreadsheetId: ss.getId(),
-    sheetName: SHEET_NAME
+    mode: 'spreadsheet_books',
+    folderUrl: getRootFolder_().getUrl(),
+    books: booksPublic_(books)
+  };
+  if (bookId) {
+    var book = resolveBook_(bookId);
+    out.book = bookPublic_(book);
+    out.spreadsheetUrl = SpreadsheetApp.openById(book.spreadsheetId).getUrl();
+    out.spreadsheetId = book.spreadsheetId;
+    out.imagesFolderUrl = getImagesFolderForBook_(book).getUrl();
+    out.sheetName = SHEET_NAME;
+  } else if (books.length === 1) {
+    out.book = bookPublic_(books[0]);
+    out.spreadsheetUrl = SpreadsheetApp.openById(books[0].spreadsheetId).getUrl();
+  }
+  return out;
+}
+
+function listBooks_() {
+  return {
+    status: 'ok',
+    books: booksPublic_(ensureBooksInitialized_())
   };
 }
 
+function addBook_(name) {
+  name = String(name || '').trim();
+  if (!name) throw new Error('帳簿名が空です');
+  if (name.length > 40) throw new Error('帳簿名は40文字以内にしてください');
+  var books = ensureBooksInitialized_();
+  for (var i = 0; i < books.length; i++) {
+    if (books[i].name === name) throw new Error('同名の帳簿が既にあります: ' + name);
+  }
+  var book = createBookFolderAndSheet_(name, null);
+  books.push(book);
+  saveBooks_(books);
+  return { status: 'ok', book: bookPublic_(book), books: booksPublic_(books) };
+}
+
+function renameBook_(bookId, name) {
+  name = String(name || '').trim();
+  if (!name) throw new Error('帳簿名が空です');
+  if (name.length > 40) throw new Error('帳簿名は40文字以内にしてください');
+  var books = ensureBooksInitialized_();
+  var book = null;
+  var idx = -1;
+  for (var i = 0; i < books.length; i++) {
+    if (books[i].id === String(bookId)) {
+      book = books[i];
+      idx = i;
+      break;
+    }
+  }
+  if (!book) throw new Error('帳簿が見つかりません');
+  for (var j = 0; j < books.length; j++) {
+    if (j !== idx && books[j].name === name) {
+      throw new Error('同名の帳簿が既にあります: ' + name);
+    }
+  }
+  book.name = name;
+  try {
+    DriveApp.getFolderById(book.folderId).setName(name);
+  } catch (_) {}
+  try {
+    SpreadsheetApp.openById(book.spreadsheetId).rename('ReceiptAI - ' + name);
+  } catch (_) {}
+  books[idx] = book;
+  saveBooks_(books);
+  return { status: 'ok', book: bookPublic_(book), books: booksPublic_(books) };
+}
+
+function deleteBook_(bookId, deleteData) {
+  var books = ensureBooksInitialized_();
+  if (books.length <= 1) {
+    throw new Error('帳簿は少なくとも1つ必要です。削除する前に別の帳簿を追加してください。');
+  }
+  var kept = [];
+  var target = null;
+  for (var i = 0; i < books.length; i++) {
+    if (books[i].id === String(bookId)) target = books[i];
+    else kept.push(books[i]);
+  }
+  if (!target) throw new Error('帳簿が見つかりません');
+  if (deleteData !== false) {
+    try {
+      DriveApp.getFolderById(target.folderId).setTrashed(true);
+    } catch (_) {}
+    try {
+      DriveApp.getFileById(target.spreadsheetId).setTrashed(true);
+    } catch (_) {}
+  }
+  saveBooks_(kept);
+  return { status: 'ok', deleted: bookPublic_(target), books: booksPublic_(kept) };
+}
+
 function saveReceipt_(data) {
+  var book = resolveBook_(data.book || data.book_id || '');
   var items = data.items || [];
   if (!items.length) throw new Error('明細が空です');
   var dateStr = normalizeDateCell_(data.date);
@@ -135,11 +249,10 @@ function saveReceipt_(data) {
   }
 
   var receiptId = String(data.receipt_id || Utilities.getUuid());
-  // 保存日時は GAS 側の日本時間を正とする（端末タイムゾーン差を避ける）
   var createdAt = formatNowTokyo_();
-  var imageInfo = saveImageIfPresent_(data, receiptId, shop);
+  var imageInfo = saveImageIfPresent_(book, data, receiptId, shop);
 
-  var sheet = getSheet_();
+  var sheet = getSheetForBook_(book);
   var startRow = sheet.getLastRow() + 1;
   var rows = [];
   for (var j = 0; j < items.length; j++) {
@@ -158,27 +271,29 @@ function saveReceipt_(data) {
     ]);
   }
   sheet.getRange(startRow, 1, rows.length, HEADERS.length).setValues(rows);
-  // 日付列を文字列として固定（Sheets の自動 Date 変換で表示が壊れるのを防止）
   sheet.getRange(startRow, 1, rows.length, 1).setNumberFormat('@');
   sheet.getRange(startRow, 3, rows.length, 1).setNumberFormat('@');
 
   return {
     status: 'success',
+    book_id: book.id,
+    book_name: book.name,
     receipt_id: receiptId,
     rows: rows.length,
     created_at: createdAt,
     date: dateStr,
     image_file_id: imageInfo.fileId || '',
     image_view_url: imageInfo.viewUrl || '',
-    spreadsheetUrl: getSpreadsheet_().getUrl()
+    spreadsheetUrl: SpreadsheetApp.openById(book.spreadsheetId).getUrl()
   };
 }
 
-function listReceipts_(month, limit) {
+function listReceipts_(bookId, month, limit) {
+  var book = resolveBook_(bookId);
   limit = Math.min(Math.max(limit || 50, 1), 200);
-  var sheet = getSheet_();
+  var sheet = getSheetForBook_(book);
   var last = sheet.getLastRow();
-  if (last < 2) return { status: 'ok', receipts: [] };
+  if (last < 2) return { status: 'ok', book_id: book.id, receipts: [] };
 
   var values = sheet.getRange(2, 1, last - 1, HEADERS.length).getValues();
   var map = {};
@@ -217,13 +332,11 @@ function listReceipts_(month, limit) {
     if (a.date === b.date) return a.created_at < b.created_at ? 1 : -1;
     return a.date < b.date ? 1 : -1;
   });
-  return { status: 'ok', receipts: list.slice(0, limit) };
+  return { status: 'ok', book_id: book.id, receipts: list.slice(0, limit) };
 }
 
-/**
- * 重複候補検索（店名＋日付＋合計。品目数指定時はそれも一致）
- */
-function findDuplicates_(shop, dateStr, total, itemCount) {
+function findDuplicates_(bookId, shop, dateStr, total, itemCount) {
+  var book = resolveBook_(bookId);
   var shopKey = normalizeShopKey_(shop);
   var day = dayKey_(dateStr);
   var totalN = Math.round(Number(total) || 0);
@@ -232,16 +345,18 @@ function findDuplicates_(shop, dateStr, total, itemCount) {
   if (!shopKey || !day) {
     return {
       status: 'ok',
+      book_id: book.id,
       duplicates: [],
       match: { shop: shop, date: day, total: totalN, item_count: wantItems }
     };
   }
 
-  var sheet = getSheet_();
+  var sheet = getSheetForBook_(book);
   var last = sheet.getLastRow();
   if (last < 2) {
     return {
       status: 'ok',
+      book_id: book.id,
       duplicates: [],
       match: { shop: shop, date: day, total: totalN, item_count: wantItems }
     };
@@ -283,6 +398,7 @@ function findDuplicates_(shop, dateStr, total, itemCount) {
 
   return {
     status: 'ok',
+    book_id: book.id,
     duplicates: dupes.slice(0, 10),
     match: { shop: shop, date: day, total: totalN, item_count: wantItems }
   };
@@ -301,15 +417,12 @@ function dayKey_(dateStr) {
   return m[1] + '-' + pad2_(m[2]) + '-' + pad2_(m[3]);
 }
 
-/**
- * 物理削除: シート上の該当 receipt_id 行をすべて削除。
- * 画像は他レシートが参照していなければ Drive のゴミ箱へ。
- */
-function deleteReceipt_(receiptId, deleteImage) {
+function deleteReceipt_(bookId, receiptId, deleteImage) {
+  var book = resolveBook_(bookId);
   receiptId = String(receiptId || '').trim();
   if (!receiptId) throw new Error('id が空です');
 
-  var sheet = getSheet_();
+  var sheet = getSheetForBook_(book);
   var last = sheet.getLastRow();
   if (last < 2) return { status: 'error', message: 'not found' };
 
@@ -352,15 +465,17 @@ function deleteReceipt_(receiptId, deleteImage) {
 
   return {
     status: 'ok',
+    book_id: book.id,
     receipt_id: receiptId,
     deleted_rows: rowNums.length,
     deleted_images: deletedImages
   };
 }
 
-function getReceipt_(receiptId) {
+function getReceipt_(bookId, receiptId) {
+  var book = resolveBook_(bookId);
   if (!receiptId) throw new Error('id が空です');
-  var sheet = getSheet_();
+  var sheet = getSheetForBook_(book);
   var last = sheet.getLastRow();
   if (last < 2) return { status: 'error', message: 'not found' };
 
@@ -390,6 +505,7 @@ function getReceipt_(receiptId) {
   if (!meta) return { status: 'error', message: 'not found' };
   meta.items = items;
   meta.status = 'ok';
+  meta.book_id = book.id;
   return meta;
 }
 
@@ -403,11 +519,9 @@ function getImageMeta_(fileId, includeData) {
     file_id: fileId,
     name: file.getName(),
     mime: mime,
-    // Drive直リンクはブラウザの <img> で失敗しやすい。表示は data=1 で本体取得を推奨
     view_url: 'https://drive.google.com/uc?export=view&id=' + fileId
   };
   if (includeData) {
-    // 1280px JPEG 想定。極端に大きい場合は拒否してタイムアウト防止
     var bytes = blob.getBytes();
     if (bytes.length > 4 * 1024 * 1024) {
       throw new Error('画像が大きすぎます（4MB超）。再撮影または再保存してください。');
@@ -417,8 +531,7 @@ function getImageMeta_(fileId, includeData) {
   return result;
 }
 
-function saveImageIfPresent_(data, receiptId, shop) {
-  // 同一写真の複数レシート用: 既に上げた画像IDを再利用
+function saveImageIfPresent_(book, data, receiptId, shop) {
   var existingId = String(data.image_file_id || data.imageFileId || '').trim();
   var existingUrl = String(data.image_view_url || data.imageViewUrl || '').trim();
   if (existingId) {
@@ -431,7 +544,6 @@ function saveImageIfPresent_(data, receiptId, shop) {
   var b64 = data.image_base64 || data.imageBase64 || '';
   if (!b64) return { fileId: '', viewUrl: '' };
 
-  // data URL 形式なら除去
   var mime = data.image_mime || data.imageMime || 'image/jpeg';
   var m = String(b64).match(/^data:([^;]+);base64,(.+)$/);
   if (m) {
@@ -441,8 +553,7 @@ function saveImageIfPresent_(data, receiptId, shop) {
 
   var bytes = Utilities.base64Decode(b64);
   var blob = Utilities.newBlob(bytes, mime, buildImageName_(receiptId, shop));
-  var file = getImagesFolder_().createFile(blob);
-  // 可能ならリンク共有も付けるが、表示は GAS action=image&data=1 が本線
+  var file = getImagesFolderForBook_(book).createFile(blob);
   try {
     file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
   } catch (_) {}
@@ -455,6 +566,8 @@ function buildImageName_(receiptId, shop) {
   return 'receipt_' + receiptId.slice(0, 8) + '_' + safe + '.jpg';
 }
 
+/* ===== Books / Drive ===== */
+
 function getRootFolder_() {
   if (FOLDER_ID) return DriveApp.getFolderById(FOLDER_ID);
   var it = DriveApp.getFoldersByName('ReceiptAI');
@@ -462,53 +575,189 @@ function getRootFolder_() {
   return DriveApp.createFolder('ReceiptAI');
 }
 
-function getImagesFolder_() {
-  var root = getRootFolder_();
-  var it = root.getFoldersByName('images');
-  if (it.hasNext()) return it.next();
-  return root.createFolder('images');
+function loadBooks_() {
+  var props = PropertiesService.getScriptProperties();
+  var raw = props.getProperty(BOOKS_PROP) || '';
+  if (!raw) return [];
+  try {
+    var arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : [];
+  } catch (_) {
+    return [];
+  }
 }
 
-function getSpreadsheet_() {
-  var props = PropertiesService.getScriptProperties();
-  var fixedId = String(SPREADSHEET_ID || '').trim();
-  var cachedId = fixedId || props.getProperty('SPREADSHEET_ID') || '';
+function saveBooks_(books) {
+  PropertiesService.getScriptProperties().setProperty(BOOKS_PROP, JSON.stringify(books));
+}
 
-  if (cachedId) {
-    try {
-      return SpreadsheetApp.openById(cachedId);
-    } catch (err) {
-      if (!fixedId) props.deleteProperty('SPREADSHEET_ID');
-      throw authFriendlyError_(err);
-    }
-  }
+function booksPublic_(books) {
+  var out = [];
+  for (var i = 0; i < books.length; i++) out.push(bookPublic_(books[i]));
+  return out;
+}
+
+function bookPublic_(book) {
+  return {
+    id: book.id,
+    name: book.name,
+    folderId: book.folderId,
+    spreadsheetId: book.spreadsheetId
+  };
+}
+
+function ensureBooksInitialized_() {
+  var books = loadBooks_();
+  if (books.length) return books;
 
   var root = getRootFolder_();
+  var legacySsId = findLegacySpreadsheetId_(root);
+  var created = [];
+
+  var first = createBookFolderAndSheet_(DEFAULT_BOOK_NAMES[0], legacySsId);
+  created.push(first);
+
+  for (var i = 1; i < DEFAULT_BOOK_NAMES.length; i++) {
+    created.push(createBookFolderAndSheet_(DEFAULT_BOOK_NAMES[i], null));
+  }
+
+  saveBooks_(created);
+  // 旧単一シートキャッシュは帳簿管理へ移行済み
+  try {
+    PropertiesService.getScriptProperties().deleteProperty('SPREADSHEET_ID');
+  } catch (_) {}
+  return created;
+}
+
+function findLegacySpreadsheetId_(root) {
+  var fixed = String(LEGACY_SPREADSHEET_ID || '').trim();
+  if (fixed) return fixed;
+  var props = PropertiesService.getScriptProperties();
+  var cached = props.getProperty('SPREADSHEET_ID') || '';
+  if (cached) return cached;
   var files = root.getFilesByName('ReceiptAI');
   while (files.hasNext()) {
     var f = files.next();
-    if (f.getMimeType() === MimeType.GOOGLE_SHEETS) {
-      try {
-        var existing = SpreadsheetApp.openById(f.getId());
-        props.setProperty('SPREADSHEET_ID', f.getId());
-        return existing;
-      } catch (err) {
-        throw authFriendlyError_(err);
+    if (f.getMimeType() === MimeType.GOOGLE_SHEETS) return f.getId();
+  }
+  return '';
+}
+
+function createBookFolderAndSheet_(name, reuseSpreadsheetId) {
+  var root = getRootFolder_();
+  var folder = findOrCreateChildFolder_(root, name);
+  var images = findOrCreateChildFolder_(folder, 'images');
+
+  // ルート直下の旧 images を最初の帳簿へ寄せる（再利用時のみ）
+  if (reuseSpreadsheetId) {
+    try {
+      var rootImages = root.getFoldersByName('images');
+      if (rootImages.hasNext()) {
+        var oldImg = rootImages.next();
+        var files = oldImg.getFiles();
+        while (files.hasNext()) {
+          try {
+            var file = files.next();
+            file.moveTo(images);
+          } catch (_) {}
+        }
       }
+    } catch (_) {}
+  }
+
+  var ssId = String(reuseSpreadsheetId || '').trim();
+  var ss;
+  if (ssId) {
+    try {
+      ss = SpreadsheetApp.openById(ssId);
+    } catch (err) {
+      throw authFriendlyError_(err);
+    }
+    try {
+      var ssFile = DriveApp.getFileById(ssId);
+      ssFile.moveTo(folder);
+    } catch (_) {}
+    try {
+      ss.rename('ReceiptAI - ' + name);
+    } catch (_) {}
+  } else {
+    ss = SpreadsheetApp.create('ReceiptAI - ' + name);
+    ssId = ss.getId();
+    try {
+      DriveApp.getFileById(ssId).moveTo(folder);
+    } catch (_) {
+      try {
+        folder.addFile(DriveApp.getFileById(ssId));
+        DriveApp.getRootFolder().removeFile(DriveApp.getFileById(ssId));
+      } catch (_) {}
     }
   }
 
-  var ss = SpreadsheetApp.create('ReceiptAI');
-  var file = DriveApp.getFileById(ss.getId());
-  root.addFile(file);
-  try {
-    DriveApp.getRootFolder().removeFile(file);
-  } catch (_) {}
-  props.setProperty('SPREADSHEET_ID', ss.getId());
-  return ss;
+  var book = {
+    id: Utilities.getUuid().replace(/-/g, '').slice(0, 12),
+    name: name,
+    folderId: folder.getId(),
+    spreadsheetId: ssId
+  };
+  getSheetForBook_(book);
+  return book;
 }
 
-/** openById 権限不足時の案内（再承認・再デプロイが必要） */
+function findOrCreateChildFolder_(parent, name) {
+  var it = parent.getFoldersByName(name);
+  if (it.hasNext()) return it.next();
+  return parent.createFolder(name);
+}
+
+function resolveBook_(bookId) {
+  var books = ensureBooksInitialized_();
+  var id = String(bookId || '').trim();
+  if (!id) {
+    if (books.length === 1) return books[0];
+    throw new Error('帳簿を選択してください（設定の帳簿セレクト）');
+  }
+  for (var i = 0; i < books.length; i++) {
+    if (books[i].id === id) return books[i];
+  }
+  throw new Error('帳簿が見つかりません。設定で帳簿一覧を再取得してください。');
+}
+
+function getImagesFolderForBook_(book) {
+  var folder = DriveApp.getFolderById(book.folderId);
+  return findOrCreateChildFolder_(folder, 'images');
+}
+
+function getSheetForBook_(book) {
+  var ss;
+  try {
+    ss = SpreadsheetApp.openById(book.spreadsheetId);
+  } catch (err) {
+    throw authFriendlyError_(err);
+  }
+  var sheet = ss.getSheetByName(SHEET_NAME);
+  if (!sheet) sheet = ss.insertSheet(SHEET_NAME);
+  if (sheet.getLastRow() === 0) {
+    sheet.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
+    sheet.setFrozenRows(1);
+  } else {
+    var first = sheet.getRange(1, 1, 1, HEADERS.length).getValues()[0];
+    if (String(first[0]) !== HEADERS[0]) {
+      sheet.insertRowBefore(1);
+      sheet.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
+      sheet.setFrozenRows(1);
+    }
+  }
+  var sheets = ss.getSheets();
+  if (sheets.length > 1) {
+    for (var i = 0; i < sheets.length; i++) {
+      if (sheets[i].getName() !== SHEET_NAME && sheets[i].getLastRow() <= 1) {
+        try { ss.deleteSheet(sheets[i]); } catch (_) {}
+      }
+    }
+  }
+  return sheet;
+}
+
 function authFriendlyError_(err) {
   var msg = String(err && err.message ? err.message : err);
   if (
@@ -525,34 +774,6 @@ function authFriendlyError_(err) {
     );
   }
   return err instanceof Error ? err : new Error(msg);
-}
-
-function getSheet_() {
-  var ss = getSpreadsheet_();
-  var sheet = ss.getSheetByName(SHEET_NAME);
-  if (!sheet) sheet = ss.insertSheet(SHEET_NAME);
-  if (sheet.getLastRow() === 0) {
-    sheet.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
-    sheet.setFrozenRows(1);
-  } else {
-    // ヘッダーが古い場合は先頭行を更新しない（既存データ保護）
-    var first = sheet.getRange(1, 1, 1, HEADERS.length).getValues()[0];
-    if (String(first[0]) !== HEADERS[0]) {
-      sheet.insertRowBefore(1);
-      sheet.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
-      sheet.setFrozenRows(1);
-    }
-  }
-  // 不要な Sheet1 を残さない
-  var sheets = ss.getSheets();
-  if (sheets.length > 1) {
-    for (var i = 0; i < sheets.length; i++) {
-      if (sheets[i].getName() !== SHEET_NAME && sheets[i].getLastRow() <= 1) {
-        try { ss.deleteSheet(sheets[i]); } catch (_) {}
-      }
-    }
-  }
-  return sheet;
 }
 
 function parseIncoming_(e) {
@@ -597,7 +818,6 @@ function isDateObject_(v) {
   return Object.prototype.toString.call(v) === '[object Date]' && !isNaN(v.getTime());
 }
 
-/** レシート日 → yyyy/MM/dd（時刻があれば yyyy/MM/dd HH:mm:ss） */
 function normalizeDateCell_(value) {
   if (isDateObject_(value)) {
     var hasTime = value.getHours() || value.getMinutes() || value.getSeconds();
@@ -631,7 +851,6 @@ function normalizeDateCell_(value) {
   return s;
 }
 
-/** 保存日時など → yyyy/MM/dd HH:mm:ss */
 function normalizeDateTimeCell_(value) {
   if (isDateObject_(value)) {
     return Utilities.formatDate(value, 'Asia/Tokyo', 'yyyy/MM/dd HH:mm:ss');

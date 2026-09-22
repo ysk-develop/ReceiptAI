@@ -174,7 +174,7 @@
       <details class="settings-section" id="gasSettings">
         <summary>スプレッドシート連携（GAS）</summary>
         <div class="settings-section-body">
-          <p class="hint">最新の <code>gas/Code.gs</code> を貼り、<code>setupReceiptAI</code> を実行後にウェブアプリを<strong>新バージョン</strong>でデプロイしてください。アクセスは「全員」。画像は長辺1280pxに縮小して送信します。</p>
+          <p class="hint">最新の <code>gas/Code.gs</code> を貼り、<code>setupReceiptAI</code> を実行後にウェブアプリを<strong>新バージョン</strong>でデプロイしてください。アクセスは「全員」。帳簿ごとにシートと画像フォルダが分かれます。</p>
           <div class="form-row">
             <label for="gasUrlInput">GAS Web App URL</label>
             <input type="url" id="gasUrlInput" placeholder="https://script.google.com/macros/s/.../exec">
@@ -184,6 +184,20 @@
             <button id="testGasBtn" class="btn btn-secondary">接続テスト</button>
           </div>
           <button id="deleteGasBtn" class="btn btn-danger-outline">URLを削除</button>
+
+          <div class="form-row" style="margin-top:1rem">
+            <label for="bookSelect">帳簿</label>
+            <select id="bookSelect">
+              <option value="">（接続テストで一覧を取得）</option>
+            </select>
+          </div>
+          <p class="hint">選んだ帳簿はこの端末に記憶されます（次回起動時も同じ帳簿を使います）。</p>
+          <div class="btn-row">
+            <button type="button" id="refreshBooksBtn" class="btn btn-secondary">一覧再取得</button>
+            <button type="button" id="addBookBtn" class="btn btn-secondary">追加</button>
+            <button type="button" id="renameBookBtn" class="btn btn-secondary">名前変更</button>
+            <button type="button" id="deleteBookBtn" class="btn btn-danger-outline">削除</button>
+          </div>
           <p id="gasTestResult" class="hint" style="margin-top:0.75rem;white-space:pre-wrap"></p>
         </div>
       </details>
@@ -199,8 +213,8 @@
       <details class="settings-section">
         <summary>このアプリについて</summary>
         <div class="settings-section-body">
-          <p class="about-text">解析結果は Google スプレッドシートに保存され、画像は Drive の ReceiptAI/images に保管されます。履歴タブで同期表示できます。</p>
-          <p class="about-text">APIキーと GAS URL は各端末の localStorage にのみ保存されます。</p>
+          <p class="about-text">解析結果は選択中の帳簿の Google スプレッドシートに保存され、画像は各帳簿フォルダの images に保管されます。履歴タブで同期表示できます。</p>
+          <p class="about-text">APIキー・GAS URL・選択中の帳簿は各端末の localStorage にのみ保存されます。</p>
         </div>
       </details>
     </section>

@@ -6,6 +6,7 @@ const STORAGE_KEYS = {
   MODEL: 'receiptai_model',
   MODELS: 'receiptai_models',
   GAS_URL: 'receiptai_gasUrl',
+  BOOK_ID: 'receiptai_bookId',
   TAX: 'receiptai_tax'
 };
 
@@ -50,6 +51,18 @@ export function setGasUrl(url) {
     localStorage.setItem(STORAGE_KEYS.GAS_URL, url);
   } else {
     localStorage.removeItem(STORAGE_KEYS.GAS_URL);
+  }
+}
+
+export function getBookId() {
+  return localStorage.getItem(STORAGE_KEYS.BOOK_ID) || '';
+}
+
+export function setBookId(id) {
+  if (id) {
+    localStorage.setItem(STORAGE_KEYS.BOOK_ID, id);
+  } else {
+    localStorage.removeItem(STORAGE_KEYS.BOOK_ID);
   }
 }
 

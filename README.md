@@ -8,8 +8,8 @@ UI は [EVCharge-Advisor](https://ysk-develop.github.io/EVCharge-Advisor/) と�
 
 ```
 スマホ PWA ──解析・修正──┐
-                         ├── GAS ──► スプレッドシート（正本）
-PC PyQt  ──同期・集計───┘         └─ Drive/ReceiptAI/images（画像）
+                         ├── GAS ──► 帳簿ごとスプレッドシート（正本）
+PC PyQt  ──同期・集計───┘         └─ Drive/ReceiptAI/<帳簿名>/images
 ```
 
 ## スマホ（GitHub Pages）
@@ -20,9 +20,9 @@ https://ysk-develop.github.io/ReceiptAI/
 
 1. [Apps Script](https://script.google.com/) で新規プロジェクト
 2. [`gas/Code.gs`](gas/Code.gs) を貼り付け。続けて **プロジェクトの設定** →「「appsscript.json」マニフェスト ファイルをエディタで表示する」をオンにし、[`gas/appsscript.json`](gas/appsscript.json) の内容（特に `oauthScopes`）を反映
-3. エディタで **`setupReceiptAI`** を実行（シート・フォルダ自動作成）。**権限の確認**でスプレッドシート／Drive を許可
+3. エディタで **`setupReceiptAI`** を実行（初期帳簿「テスト用」「あーちゃん用」とシート・フォルダを自動作成）。**権限の確認**でスプレッドシート／Drive を許可
 4. **デプロイ → ウェブアプリ**（実行:自分 / アクセス:**全員**）
-5. `/exec` URL をアプリ設定に保存
+5. `/exec` URL をアプリ設定に保存し、**帳簿**を選択（選択は端末に記憶）
 6. コード変更後は必ず **新バージョン** で再デプロイ
 
 履歴読み込みで `SpreadsheetApp.openById` の権限エラーが出る場合:
@@ -31,11 +31,17 @@ https://ysk-develop.github.io/ReceiptAI/
 2. エディタで **`setupReceiptAI`** を再実行し、追加の権限をすべて許可
 3. デプロイ → ウェブアプリ → **新バージョン** で再デプロイ（URLは変わらないことが多い）
 
+### 帳簿（複数家計簿）
+
+- GAS URL は1つ。設定のセレクトで送信先帳簿を切り替えます（追加・名前変更・削除可）
+- Drive は `ReceiptAI/<帳簿名>/` 配下にシートと `images` が分かれます
+- 選んだ帳簿 ID は API キー・GAS URL と同様に端末へ保存されます
+
 ### 使い方
 
-1. 設定で Gemini API キー・GAS URL を保存
+1. 設定で Gemini API キー・GAS URL・帳簿を保存
 2. 写真選択（自動で 1280px JPEG 縮小）またはメモ → AI解析 → 修正
-3. **スプレッドシートへ保存**（画像があれば images フォルダへ）
+3. **スプレッドシートへ保存**（画像があれば当該帳簿の images へ）
 4. **履歴**タブで同期表示／**画像を表示**（GAS経由で本体取得。Drive直リンクは使いません）
 
 ## 削除

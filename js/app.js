@@ -1,11 +1,12 @@
 import {
   getApiKey, setApiKey, getModel, setModel,
-  getModels, setModels, getGasUrl, setGasUrl
+  getModels, setModels, getGasUrl, setGasUrl, getBookId, setBookId
 } from './storage.js';
 import { CATEGORIES, normalizeCategory } from './categories.js';
 import {
   fetchModels, analyzeReceipt, sendToGas, pingGas,
-  listReceipts, getReceipt, fetchReceiptImage, deleteReceipt, findDuplicateReceipts
+  listReceipts, getReceipt, fetchReceiptImage, deleteReceipt, findDuplicateReceipts,
+  listBooks, addBook, renameBook, deleteBook
 } from './gemini-api.js';
 import { resizeImageFile } from './image-util.js';
 import {
@@ -202,6 +203,174 @@ function initSettings() {
     calcTotal();
     showMessage('消費税設定を保存しました', 'success');
   };
+
+  initBookControls();
+  if (gasUrl) {
+    refreshBooksSelect({ silent: true }).catch(() => {});
+  }
+}
+
+function initBookControls() {
+  const sel = $('bookSelect');
+  if (!sel) return;
+  sel.addEventListener('change', () => {
+    const id = sel.value;
+    setBookId(id);
+    updateBookHint();
+  });
+  $('refreshBooksBtn')?.addEventListener('click', () => refreshBooksSelect({ silent: false }));
+  $('addBookBtn')?.addEventListener('click', handleAddBook);
+  $('renameBookBtn')?.addEventListener('click', handleRenameBook);
+  $('deleteBookBtn')?.addEventListener('click', handleDeleteBook);
+}
+
+function populateBookSelect(books, preferredId) {
+  const sel = $('bookSelect');
+  if (!sel) return;
+  const want = preferredId || getBookId() || '';
+  sel.innerHTML = '';
+  if (!books.length) {
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = '（帳簿がありません。追加してください）';
+    sel.appendChild(opt);
+    setBookId('');
+    updateBookHint();
+    return;
+  }
+  let matched = false;
+  books.forEach((b) => {
+    const opt = document.createElement('option');
+    opt.value = b.id;
+    opt.textContent = b.name || b.id;
+    if (b.id === want) {
+      opt.selected = true;
+      matched = true;
+    }
+    sel.appendChild(opt);
+  });
+  if (!matched) {
+    sel.selectedIndex = 0;
+  }
+  setBookId(sel.value);
+  updateBookHint();
+}
+
+function updateBookHint() {
+  const sel = $('bookSelect');
+  const out = $('gasTestResult');
+  if (!sel || !out) return;
+  const name = sel.options[sel.selectedIndex]?.textContent || '';
+  if (sel.value && name) {
+    // keep existing test result if present; append soft hint via title only
+    sel.title = `選択中: ${name}`;
+  }
+}
+
+async function refreshBooksSelect({ silent = false } = {}) {
+  const gasUrl = $('gasUrlInput')?.value.trim() || getGasUrl();
+  if (!gasUrl) {
+    if (!silent) showMessage('先に GAS URL を保存してください');
+    return [];
+  }
+  try {
+    const books = await listBooks(gasUrl);
+    populateBookSelect(books, getBookId());
+    if (!silent) {
+      const out = $('gasTestResult');
+      if (out) out.textContent = `帳簿一覧を更新しました（${books.length} 件）`;
+      showMessage(`帳簿 ${books.length} 件を取得しました`, 'success');
+    }
+    return books;
+  } catch (err) {
+    if (!silent) {
+      showMessage(err.message || String(err));
+      const out = $('gasTestResult');
+      if (out) out.textContent = String(err.message || err);
+    }
+    throw err;
+  }
+}
+
+async function handleAddBook() {
+  const gasUrl = requireGasUrl();
+  if (!gasUrl) return;
+  const name = window.prompt('新しい帳簿名', '');
+  if (name == null) return;
+  const trimmed = name.trim();
+  if (!trimmed) {
+    showMessage('帳簿名を入力してください');
+    return;
+  }
+  try {
+    const data = await addBook(gasUrl, trimmed);
+    populateBookSelect(data.books || [], data.book?.id || getBookId());
+    showMessage(`帳簿「${trimmed}」を追加しました`, 'success');
+  } catch (err) {
+    showMessage(err.message || String(err));
+  }
+}
+
+async function handleRenameBook() {
+  const gasUrl = requireGasUrl();
+  if (!gasUrl) return;
+  const bookId = requireBookId();
+  if (!bookId) return;
+  const sel = $('bookSelect');
+  const current = sel?.options[sel.selectedIndex]?.textContent || '';
+  const name = window.prompt('新しい帳簿名', current);
+  if (name == null) return;
+  const trimmed = name.trim();
+  if (!trimmed) {
+    showMessage('帳簿名を入力してください');
+    return;
+  }
+  try {
+    const data = await renameBook(gasUrl, bookId, trimmed);
+    populateBookSelect(data.books || [], bookId);
+    showMessage(`「${trimmed}」に変更しました`, 'success');
+  } catch (err) {
+    showMessage(err.message || String(err));
+  }
+}
+
+async function handleDeleteBook() {
+  const gasUrl = requireGasUrl();
+  if (!gasUrl) return;
+  const bookId = requireBookId();
+  if (!bookId) return;
+  const sel = $('bookSelect');
+  const current = sel?.options[sel.selectedIndex]?.textContent || '';
+  if (!window.confirm(
+    `帳簿「${current}」を削除しますか？\nDrive 上のフォルダ・シート・画像もゴミ箱へ移します。\n（少なくとも1つは残す必要があります）`
+  )) return;
+  try {
+    const data = await deleteBook(gasUrl, bookId, { deleteData: true });
+    populateBookSelect(data.books || [], getBookId());
+    showMessage(`帳簿「${current}」を削除しました`, 'success');
+  } catch (err) {
+    showMessage(err.message || String(err));
+  }
+}
+
+function requireGasUrl() {
+  const gasUrl = $('gasUrlInput').value.trim() || getGasUrl();
+  if (!gasUrl) {
+    showMessage('設定タブでGAS Web App URLを保存してください');
+    $('gasSettings').open = true;
+    return null;
+  }
+  return gasUrl;
+}
+
+function requireBookId() {
+  const bookId = $('bookSelect')?.value || getBookId();
+  if (!bookId) {
+    showMessage('設定タブで帳簿を選択（または追加）してください');
+    $('gasSettings').open = true;
+    return null;
+  }
+  return bookId;
 }
 
 function initImageInput() {
@@ -697,16 +866,6 @@ function ensureApiKey() {
   return apiKey;
 }
 
-function requireGasUrl() {
-  const gasUrl = $('gasUrlInput').value.trim() || getGasUrl();
-  if (!gasUrl) {
-    showMessage('設定タブでGAS Web App URLを保存してください');
-    $('gasSettings').open = true;
-    return null;
-  }
-  return gasUrl;
-}
-
 async function handleAnalyze() {
   clearMessage();
   const memo = $('textMemo').value.trim();
@@ -753,7 +912,9 @@ function handleManualEdit() {
 }
 
 async function saveOnePayload(gasUrl, payload, { uploadFresh = false, reuseImage = null } = {}) {
-  const body = { ...payload };
+  const book = payload.book || payload.book_id || getBookId();
+  if (!book) throw new Error('帳簿を選択してください');
+  const body = { ...payload, book };
   if (uploadFresh && uploadImageBase64) {
     body.image_base64 = uploadImageBase64;
     body.image_mime = 'image/jpeg';
@@ -793,6 +954,7 @@ function formatDuplicateConfirm(dupes, shop, dateStr, total) {
 async function confirmNoDuplicateOrProceed(gasUrl, payload) {
   try {
     const dupes = await findDuplicateReceipts(gasUrl, {
+      bookId: payload.book || getBookId(),
       shop_name: payload.shop_name,
       date: payload.date,
       total_amount: payload.total_amount
@@ -812,6 +974,8 @@ async function handleSend() {
   clearMessage();
   const gasUrl = requireGasUrl();
   if (!gasUrl) return;
+  const bookId = requireBookId();
+  if (!bookId) return;
 
   stashCurrentReceiptEdits();
   const itemsSave = collectItemsForSave();
@@ -823,6 +987,7 @@ async function handleSend() {
   const totalAmount = itemsSave.reduce((sum, i) => sum + i.price, 0);
   const payload = {
     timestamp: new Date().toISOString(),
+    book: bookId,
     shop_name: $('shopName').value.trim() || '不明',
     date: receiptDateForSave(),
     total_amount: totalAmount,
@@ -874,6 +1039,8 @@ async function handleSendAll() {
   clearMessage();
   const gasUrl = requireGasUrl();
   if (!gasUrl) return;
+  const bookId = requireBookId();
+  if (!bookId) return;
   stashCurrentReceiptEdits();
   if (!analyzedReceipts.length) {
     showMessage('保存するレシートがありません');
@@ -909,6 +1076,7 @@ async function handleSendAll() {
 
       const payload = {
         timestamp: new Date().toISOString(),
+        book: bookId,
         shop_name: r.shop_name || '不明',
         date: r.date || todayStr(),
         total_amount: itemsSave.reduce((s, it) => s + it.price, 0),
@@ -956,11 +1124,13 @@ async function handleSendAll() {
 async function handleRefreshHistory() {
   const gasUrl = requireGasUrl();
   if (!gasUrl) return;
+  const bookId = requireBookId();
+  if (!bookId) return;
   const month = $('historyMonth').value || '';
   $('historyStatus').textContent = '読み込み中…';
   $('historyList').innerHTML = '';
   try {
-    const receipts = await listReceipts(gasUrl, { month, limit: 50 });
+    const receipts = await listReceipts(gasUrl, { bookId, month, limit: 50 });
     if (!receipts.length) {
       $('historyStatus').textContent = 'データがありません';
       return;
@@ -989,7 +1159,7 @@ async function handleRefreshHistory() {
         box.textContent = '取得中…';
         box.classList.remove('hidden');
         try {
-          const full = await getReceipt(gasUrl, r.receipt_id);
+          const full = await getReceipt(gasUrl, r.receipt_id, { bookId });
           box.innerHTML = `<ul>${(full.items || []).map((it) =>
             `<li>${escapeHtml(it.name)} — ${Number(it.price).toLocaleString()} 円（${escapeHtml(it.category)}）</li>`
           ).join('')}</ul>`;
@@ -1009,7 +1179,7 @@ async function handleRefreshHistory() {
         btn.disabled = true;
         btn.textContent = '削除中…';
         try {
-          const result = await deleteReceipt(gasUrl, r.receipt_id, { deleteImage: true });
+          const result = await deleteReceipt(gasUrl, r.receipt_id, { bookId, deleteImage: true });
           card.remove();
           const left = $('historyList').querySelectorAll('.history-card').length;
           $('historyStatus').textContent = left ? `${left} 件` : 'データがありません';
@@ -1108,7 +1278,11 @@ async function handleTestGas() {
   $('testGasBtn').textContent = 'テスト中...';
   out.textContent = '接続確認中…';
   try {
-    const result = await pingGas(gasUrl);
+    const bookId = $('bookSelect')?.value || getBookId() || '';
+    const result = await pingGas(gasUrl, { bookId });
+    if (result.ok && result.data?.books) {
+      populateBookSelect(result.data.books, bookId || getBookId());
+    }
     out.textContent = result.message + (result.data?.spreadsheetUrl ? `\n${result.data.spreadsheetUrl}` : '');
     if (result.ok) {
       setGasUrl(gasUrl.replace(/\/$/, ''));

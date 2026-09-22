@@ -912,11 +912,28 @@ async function handleAnalyze() {
       memo
     });
     openEditor(result);
+    if (result.model_used && result.model_used !== model) {
+      setModel(result.model_used);
+      if ($('modelSelect')) {
+        const opt = [...$('modelSelect').options].find((o) => o.value === result.model_used);
+        if (opt) $('modelSelect').value = result.model_used;
+        else {
+          const o = document.createElement('option');
+          o.value = result.model_used;
+          o.textContent = result.model_used;
+          $('modelSelect').appendChild(o);
+          $('modelSelect').value = result.model_used;
+        }
+      }
+    }
     const n = result.receipts?.length || 0;
+    const usedHint = result.model_fallback
+      ? `（混雑のため ${result.model_used} で解析）`
+      : '';
     showMessage(
       n > 1
-        ? `解析完了。${n} 枚のレシートを検出しました。切り替えながら確認してください。`
-        : '解析完了。税込金額を確認・修正してください。',
+        ? `解析完了。${n} 枚のレシートを検出しました。切り替えながら確認してください。${usedHint}`
+        : `解析完了。税込金額を確認・修正してください。${usedHint}`,
       'success'
     );
   } catch (err) {

@@ -58,7 +58,86 @@ def _request(url: str, payload: dict[str, Any] | None = None, api_key: str = "")
             return json.loads(res.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"HTTP {e.code}: {body[:500]}") from e
+        raise RuntimeError(_format_http_error(e.code, body)) from e
+
+
+def _format_http_error(code: int, body: str) -> str:
+    message = body
+    status_name = ""
+    try:
+        j = json.loads(body)
+        err = j.get("error") or {}
+        message = str(err.get("message") or body)
+        status_name = str(err.get("status") or "")
+        code = int(err.get("code") or code)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        pass
+    high = (
+        code == 503
+        or status_name == "UNAVAILABLE"
+        or re.search(r"high demand|overloaded|unavailable", message, re.I)
+    )
+    if high:
+        return (
+            f"Gemini が混雑しています（503）。"
+            f"APIキーやレート制限の問題ではありません。"
+            f"別モデル（例: gemini-2.0-flash）に切り替えるか、しばらくして再試行してください。"
+        )
+    if code == 429 or re.search(r"rate limit|quota|resource.?exhausted", message, re.I):
+        return f"Gemini の利用上限に達した可能性があります（{code}）。しばらく待ってから再試行してください。"
+    return f"HTTP {code}: {message[:400]}"
+
+
+def _is_overload_error(exc: BaseException) -> bool:
+    return bool(re.search(r"混雑|503|UNAVAILABLE|high demand", str(exc), re.I))
+
+
+_FALLBACK_MODELS = [
+    "gemini-2.0-flash",
+    "gemini-2.5-flash",
+    "gemini-1.5-flash",
+    "gemini-1.5-flash-8b",
+    "gemini-2.0-flash-lite",
+    "gemini-1.5-flash-lite",
+]
+
+
+def _model_candidates(preferred: str) -> list[str]:
+    p = (preferred or "").strip()
+    out: list[str] = []
+    if p:
+        out.append(p)
+    if re.search(r"lite", p, re.I):
+        base = re.sub(r"-?lite(-latest)?$", "", p, flags=re.I).rstrip("-")
+        if base and base not in out:
+            out.append(base)
+    for m in _FALLBACK_MODELS:
+        if m not in out:
+            out.append(m)
+    return out
+
+
+def _request_with_retry(
+    url: str,
+    payload: dict[str, Any] | None = None,
+    *,
+    api_key: str = "",
+    retries: int = 3,
+) -> dict[str, Any]:
+    import time
+
+    last: BaseException | None = None
+    for attempt in range(retries + 1):
+        try:
+            return _request(url, payload, api_key=api_key)
+        except RuntimeError as exc:
+            last = exc
+            if _is_overload_error(exc) and attempt < retries:
+                time.sleep(1.5 * (2**attempt))
+                continue
+            raise
+    assert last is not None
+    raise last
 
 
 def fetch_models(api_key: str) -> list[dict[str, str]]:
@@ -218,7 +297,7 @@ total_amount はレシート税込合計（参考）。小計・税・合計行�
     if not media and not memo.strip():
         raise ValueError("画像またはテキストメモが必要です")
 
-    def _call(parts: list[dict[str, Any]]) -> dict[str, Any]:
+    def _call(parts: list[dict[str, Any]], model_id: str) -> dict[str, Any]:
         body = {
             "contents": [{"parts": parts}],
             "generationConfig": {
@@ -228,8 +307,8 @@ total_amount はレシート税込合計（参考）。小計・税・合計行�
                 "temperature": 0.1,
             },
         }
-        url = f"{API_BASE}/models/{model}:generateContent"
-        data = _request(url, body, api_key=api_key)
+        url = f"{API_BASE}/models/{model_id}:generateContent"
+        data = _request_with_retry(url, body, api_key=api_key)
         text = ""
         for p in (data.get("candidates") or [{}])[0].get("content", {}).get("parts") or []:
             text += p.get("text") or ""
@@ -237,23 +316,50 @@ total_amount はレシート税込合計（参考）。小計・税・合計行�
             raise RuntimeError("AIからの応答が空です")
         return json.loads(text)
 
-    parsed = _call([*media, {"text": prompt}])
-    receipts = normalize_analysis_result(parsed, today)
-    declared = int(parsed.get("receipt_count") or 0)
+    last_err: BaseException | None = None
+    used_model = model
+    parsed: dict[str, Any] = {}
+    receipts: list[dict[str, Any]] = []
+    declared = 0
 
-    if declared > len(receipts) and media:
-        retry = (
-            f"前回は receipt_count={declared} なのに {len(receipts)} 枚しか再構成できませんでした。"
-            f"左から右へ全レシートの品目を lines に再出力してください。税込。JSONのみ。"
-        )
-        if memo.strip():
-            retry += f"\n\n【入力メモ】\n{memo.strip()}"
-        parsed2 = _call([*media, {"text": retry}])
-        retried = normalize_analysis_result(parsed2, today)
-        if len(retried) >= len(receipts):
-            receipts = retried
-            parsed = parsed2
+    for model_id in _model_candidates(model):
+        try:
+            parsed = _call([*media, {"text": prompt}], model_id)
+            receipts = normalize_analysis_result(parsed, today)
+            declared = int(parsed.get("receipt_count") or 0)
 
+            if declared > len(receipts) and media:
+                retry = (
+                    f"前回は receipt_count={declared} なのに {len(receipts)} 枚しか再構成できませんでした。"
+                    f"左から右へ全レシートの品目を lines に再出力してください。税込。JSONのみ。"
+                )
+                if memo.strip():
+                    retry += f"\n\n【入力メモ】\n{memo.strip()}"
+                parsed2 = _call([*media, {"text": retry}], model_id)
+                retried = normalize_analysis_result(parsed2, today)
+                if len(retried) >= len(receipts):
+                    receipts = retried
+                    parsed = parsed2
+
+            if not receipts:
+                raise RuntimeError("レシートを検出できませんでした")
+            used_model = model_id
+            last_err = None
+            break
+        except Exception as exc:  # noqa: BLE001
+            last_err = exc
+            if not _is_overload_error(exc):
+                raise
+            continue
+
+    if last_err is not None:
+        raise last_err
     if not receipts:
         raise RuntimeError("レシートを検出できませんでした")
-    return {"receipts": receipts, "raw": parsed, "receipt_count_declared": declared or len(receipts)}
+    return {
+        "receipts": receipts,
+        "raw": parsed,
+        "receipt_count_declared": declared or len(receipts),
+        "model_used": used_model,
+        "model_fallback": used_model != model,
+    }

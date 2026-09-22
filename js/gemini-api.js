@@ -218,7 +218,76 @@ export function normalizeAnalysisResult(parsed, today = localTodayStr()) {
   }).filter((r) => r.items.length > 0);
 }
 
-async function callGeminiJson(apiKey, model, parts, schema) {
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function parseGeminiHttpError(status, bodyText) {
+  let message = String(bodyText || '');
+  let code = status;
+  let statusName = '';
+  try {
+    const j = JSON.parse(bodyText);
+    message = j?.error?.message || message;
+    code = j?.error?.code || status;
+    statusName = j?.error?.status || '';
+  } catch {
+    /* keep raw */
+  }
+  const highDemand =
+    status === 503 ||
+    statusName === 'UNAVAILABLE' ||
+    /high demand|overloaded|unavailable/i.test(message);
+  const rateLimited =
+    status === 429 || /rate limit|quota|resource.?exhausted/i.test(message);
+  return { highDemand, rateLimited, message, code, statusName };
+}
+
+function formatGeminiUserError(info, model) {
+  if (info.highDemand) {
+    return (
+      `Gemini「${model}」が混雑しています（503）。` +
+      `APIキーやレート制限の問題ではありません。` +
+      `設定で別モデル（例: gemini-2.0-flash）に切り替えるか、しばらくして再試行してください。`
+    );
+  }
+  if (info.rateLimited) {
+    return `Gemini の利用上限に達した可能性があります（${info.code}）。しばらく待ってから再試行してください。`;
+  }
+  return `レシート解析失敗 (${info.code}): ${info.message}`;
+}
+
+function isModelOverloadError(err) {
+  const s = String(err?.message || err || '');
+  return /混雑|503|UNAVAILABLE|high demand/i.test(s);
+}
+
+/** Prefer non-lite siblings when the selected model is overloaded. */
+const FALLBACK_MODELS = [
+  'gemini-2.0-flash',
+  'gemini-2.5-flash',
+  'gemini-1.5-flash',
+  'gemini-1.5-flash-8b',
+  'gemini-2.0-flash-lite',
+  'gemini-1.5-flash-lite',
+  'gemini-1.5-flash-lite-latest'
+];
+
+function modelCandidates(preferred) {
+  const p = String(preferred || '').trim();
+  const out = [];
+  if (p) out.push(p);
+  if (/lite/i.test(p)) {
+    const base = p.replace(/-?lite(-latest)?$/i, '').replace(/-+$/, '');
+    if (base && base !== p) out.push(base);
+  }
+  for (const m of FALLBACK_MODELS) {
+    if (!out.includes(m)) out.push(m);
+  }
+  return out;
+}
+
+async function callGeminiJson(apiKey, model, parts, schema, { retries = 3 } = {}) {
   const url = `${API_BASE}/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
   const body = {
     contents: [{ parts }],
@@ -229,19 +298,29 @@ async function callGeminiJson(apiKey, model, parts, schema) {
       temperature: 0.1
     }
   };
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  });
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`レシート解析失敗 (${res.status}): ${err}`);
+
+  let lastInfo = null;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    if (res.ok) {
+      const data = await res.json();
+      const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '';
+      if (!text) throw new Error('AIからの応答が空です');
+      return JSON.parse(text);
+    }
+    const errText = await res.text();
+    lastInfo = parseGeminiHttpError(res.status, errText);
+    if ((lastInfo.highDemand || lastInfo.rateLimited) && attempt < retries) {
+      await sleep(1500 * 2 ** attempt);
+      continue;
+    }
+    throw new Error(formatGeminiUserError(lastInfo, model));
   }
-  const data = await res.json();
-  const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '';
-  if (!text) throw new Error('AIからの応答が空です');
-  return JSON.parse(text);
+  throw new Error(formatGeminiUserError(lastInfo || { message: '不明なエラー', code: 503 }, model));
 }
 
 export async function analyzeReceipt(apiKey, model, { base64Data, mimeType, memo }) {
@@ -252,31 +331,45 @@ export async function analyzeReceipt(apiKey, model, { base64Data, mimeType, memo
   }
   if (mediaParts.length === 0 && !memo) throw new Error('画像またはメモが必要です');
 
-  const firstParts = [...mediaParts, { text: buildPrompt(today, memo) }];
-  let parsed = await callGeminiJson(apiKey, model, firstParts, RECEIPT_SCHEMA);
-  let receipts = normalizeAnalysisResult(parsed, today);
-  const declared = Number(parsed.receipt_count) || 0;
+  const candidates = modelCandidates(model);
+  let lastErr = null;
 
-  // Retry once if model declared more receipts than it returned
-  if (declared > receipts.length && base64Data) {
-    const retryParts = [
-      ...mediaParts,
-      {
-        text: buildRetryPrompt(today, declared, receipts.length) +
-          (memo ? `\n\n【入力メモ】\n${memo}` : '')
+  for (const m of candidates) {
+    try {
+      const firstParts = [...mediaParts, { text: buildPrompt(today, memo) }];
+      let parsed = await callGeminiJson(apiKey, m, firstParts, RECEIPT_SCHEMA);
+      let receipts = normalizeAnalysisResult(parsed, today);
+      const declared = Number(parsed.receipt_count) || 0;
+
+      // Retry once if model declared more receipts than it returned
+      if (declared > receipts.length && base64Data) {
+        const retryParts = [
+          ...mediaParts,
+          {
+            text: buildRetryPrompt(today, declared, receipts.length) +
+              (memo ? `\n\n【入力メモ】\n${memo}` : '')
+          }
+        ];
+        parsed = await callGeminiJson(apiKey, m, retryParts, RECEIPT_SCHEMA);
+        const retried = normalizeAnalysisResult(parsed, today);
+        if (retried.length >= receipts.length) receipts = retried;
       }
-    ];
-    parsed = await callGeminiJson(apiKey, model, retryParts, RECEIPT_SCHEMA);
-    const retried = normalizeAnalysisResult(parsed, today);
-    if (retried.length >= receipts.length) receipts = retried;
+
+      if (!receipts.length) throw new Error('レシートを検出できませんでした');
+      return {
+        receipts,
+        raw: parsed,
+        receipt_count_declared: declared || receipts.length,
+        model_used: m,
+        model_fallback: m !== model
+      };
+    } catch (err) {
+      lastErr = err;
+      if (!isModelOverloadError(err)) throw err;
+    }
   }
 
-  if (!receipts.length) throw new Error('レシートを検出できませんでした');
-  return {
-    receipts,
-    raw: parsed,
-    receipt_count_declared: declared || receipts.length
-  };
+  throw lastErr || new Error('レシート解析に失敗しました');
 }
 
 export function normalizeGasUrl(url) {

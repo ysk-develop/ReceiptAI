@@ -146,7 +146,7 @@ function buildPrompt(today, memo) {
 - どうしても不明なときのみ「現金」。
 
 【金額】
-- price はレシートに印字されている個別金額をそのまま（多くの店では税抜）。アプリ側で税込換算するため、勝手に税込へ直さない。
+- price はレシートに印字されている個別金額をそのまま（税抜でも税込でも換算しない）。アプリ側で扱いを切り替える。
 - total_amount だけはレシート下部の「合計／お会計」の税込額（参考）。
 - tax_rate_type は軽減対象（*・軽・8%など）なら "reduced"、それ以外は "standard"。
 - 小計・消費税・内税・外税・合計の行は lines に入れない。
@@ -161,7 +161,7 @@ JSONのみ出力。`;
 function buildRetryPrompt(today, expectedCount, gotCount) {
   return `前回の抽出では receipt_count=${expectedCount} なのに lines から再構成したレシートが ${gotCount} 枚しかありませんでした。
 画像内の紙レシートを左から右へすべて再抽出し、receipt_count 枚ぶんの品目を lines に出力してください。
-金額は税込。小計・税・合計行は lines に入れない。日付不明のみ ${today}。
+price はレシート印字の個別金額をそのまま（税抜・税込の換算はしない）。total_amount は税込合計。小計・税・合計行は lines に入れない。日付不明のみ ${today}。
 JSONのみ。`;
 }
 

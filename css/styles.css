@@ -408,7 +408,13 @@ main {
   white-space: nowrap;
 }
 
-/* Compact item list: name + 修正 + ✕ / amount + category (right, column-aligned) */
+.price-basis-row {
+  margin: 0.75rem 0 0.5rem;
+}
+
+.price-basis-row .hint {
+  margin: 0.35rem 0 0;
+}
 .item-line {
   display: flex;
   flex-direction: column;

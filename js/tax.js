@@ -78,3 +78,37 @@ export function normalizeRateType(value, settings = getTaxSettings()) {
   if (value === 'standard' || value === 10 || value === '10') return 'standard';
   return settings.default_rate_type === 'reduced' ? 'reduced' : 'standard';
 }
+
+/**
+ * Guess whether printed line prices are tax-inclusive from total vs item sum.
+ * @returns {{ basis: 'exclusive'|'inclusive', reason: string }}
+ */
+export function suggestPriceBasis(receipt, settings = getTaxSettings()) {
+  const items = receipt?.items || [];
+  const printedSum = items.reduce(
+    (s, it) => s + (Number(it.price_excl ?? it.price) || 0),
+    0
+  );
+  const total = Number(receipt?.total_amount) || 0;
+  if (printedSum <= 0 || total <= 0) {
+    return { basis: 'exclusive', reason: '' };
+  }
+  const tol = Math.max(2, Math.round(total * 0.02));
+  const asPrintedDiff = Math.abs(printedSum - total);
+
+  let converted = 0;
+  for (const it of items) {
+    const excl = Number(it.price_excl ?? it.price) || 0;
+    const rt = normalizeRateType(it.tax_rate_type, settings);
+    converted += calcInclusive(excl, rt, settings).incl;
+  }
+  const asExclDiff = Math.abs(converted - total);
+
+  if (asPrintedDiff <= tol && asPrintedDiff <= asExclDiff) {
+    return {
+      basis: 'inclusive',
+      reason: '合計と品目合計が近いため税込印字と推定'
+    };
+  }
+  return { basis: 'exclusive', reason: '' };
+}

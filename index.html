@@ -14,7 +14,7 @@
 <body>
   <header class="header">
     <h1>🧾 レシート自動仕分け</h1>
-    <p class="app-version" id="appVersion">v28</p>
+    <p class="app-version" id="appVersion">v29</p>
   </header>
 
   <nav class="tabs" role="tablist">
@@ -85,11 +85,20 @@
             <button type="button" class="btn btn-secondary btn-sm meta-line-edit" id="editPaymentBtn">修正</button>
           </div>
 
+          <div class="form-row price-basis-row">
+            <label for="priceBasisSelect">印字金額の扱い</label>
+            <select id="priceBasisSelect">
+              <option value="exclusive">印字額は税抜（税率を加算）</option>
+              <option value="inclusive">印字額は税込（そのまま集計）</option>
+            </select>
+            <p id="priceBasisHint" class="hint"></p>
+          </div>
+
           <div id="itemList"></div>
           <button id="addItemBtn" class="btn btn-secondary btn-sm">+ 明細行を追加</button>
 
           <div class="total-box">
-            <span>税込合計（換算）</span>
+            <span id="totalBoxLabel">税込合計（換算）</span>
             <span id="totalPrice" class="total-price">0 円</span>
           </div>
           <p id="receiptTotalHint" class="hint"></p>
@@ -230,7 +239,7 @@
         <div class="settings-section-body">
           <p class="about-text">解析結果は選択中の帳簿の Google スプレッドシートに保存され、画像は各帳簿フォルダの images に保管されます。履歴タブで同期表示できます。</p>
           <p class="about-text">APIキー・GAS URL・選択中の帳簿は各端末の localStorage にのみ保存されます。</p>
-          <p class="about-text">アプリバージョン: <strong id="aboutVersion">v28</strong>（この数字が上がっていれば最新のデプロイが届いています）</p>
+          <p class="about-text">アプリバージョン: <strong id="aboutVersion">v29</strong>（この数字が上がっていれば最新のデプロイが届いています）</p>
           <p class="hint">ホーム画面の PWA では下に引いての再読込ができないため、更新後は下のボタンで最新版を取り込んでください。</p>
           <button type="button" id="forceUpdateBtn" class="btn btn-primary">最新版を読み込み</button>
           <p id="forceUpdateStatus" class="hint" style="margin-top:0.5rem"></p>

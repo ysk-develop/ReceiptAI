@@ -330,7 +330,7 @@ def analyze_receipt(
 - 左右に並ぶレシートはすべて別番号 (1,2,3...)。同じ店でも紙が別なら別番号。
 - lines に全レシートの全品目を漏れなく出す。1枚分だけの出力は誤り（1枚しかない場合を除く）。
 
-【金額】price は印字どおり（税抜が多い）。tax_rate_type は軽減なら reduced、それ以外は standard。
+【金額】price はレシート印字の個別金額をそのまま（税抜・税込へ勝手に換算しない）。tax_rate_type は軽減なら reduced、それ以外は standard。
 total_amount はレシート税込合計（参考）。小計・税・合計行は lines に入れない。
 【支払い方法】合計直下や「○○支払」「現金」「クレジット」などから payment_method を読み取る。不明なら現金。
 カテゴリ: [{cats}]
@@ -389,7 +389,8 @@ total_amount はレシート税込合計（参考）。小計・税・合計行�
             if declared > len(receipts) and media:
                 retry = (
                     f"前回は receipt_count={declared} なのに {len(receipts)} 枚しか再構成できませんでした。"
-                    f"左から右へ全レシートの品目を lines に再出力してください。税込。JSONのみ。"
+                    f"左から右へ全レシートの品目を lines に再出力してください。"
+                    f"price は印字どおり（換算しない）。total_amount は税込合計。JSONのみ。"
                 )
                 if memo.strip():
                     retry += f"\n\n【入力メモ】\n{memo.strip()}"

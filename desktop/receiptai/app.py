@@ -48,7 +48,7 @@ from .config import (
 )
 from .image_util import resize_to_jpeg_base64
 from .styles import APP_STYLESHEET
-from .tax_util import calc_inclusive, normalize_rate_type
+from .tax_util import calc_exclusive_from_incl, calc_inclusive, normalize_rate_type, suggest_price_basis
 
 LIST_ROW_HEIGHT = 40
 TABLE_BTN_W = 72
@@ -424,6 +424,21 @@ class MainWindow(QMainWindow):
         fl.addLayout(pay, 1)
         layout.addWidget(form)
 
+        basis_card = _card()
+        bl = QHBoxLayout(basis_card)
+        bl.setContentsMargins(12, 8, 12, 8)
+        bl.addWidget(QLabel("印字金額の扱い"))
+        self.price_basis_combo = QComboBox()
+        self.price_basis_combo.addItem("印字額は税抜（税率を加算）", "exclusive")
+        self.price_basis_combo.addItem("印字額は税込（そのまま集計）", "inclusive")
+        self.price_basis_combo.currentIndexChanged.connect(lambda _i: self._recalc_total())
+        bl.addWidget(self.price_basis_combo, 1)
+        self.price_basis_hint = QLabel("")
+        self.price_basis_hint.setObjectName("Muted")
+        self.price_basis_hint.setWordWrap(True)
+        bl.addWidget(self.price_basis_hint, 2)
+        layout.addWidget(basis_card)
+
         items_card = _card()
         iv = QVBoxLayout(items_card)
         iv.setContentsMargins(12, 12, 12, 12)
@@ -573,38 +588,80 @@ class MainWindow(QMainWindow):
                 )
         return items
 
+    def current_price_basis(self) -> str:
+        if hasattr(self, "price_basis_combo"):
+            data = self.price_basis_combo.currentData()
+            if data == "inclusive":
+                return "inclusive"
+        return "exclusive"
+
+    def set_price_basis(self, basis: str, hint: str = "") -> None:
+        if not hasattr(self, "price_basis_combo"):
+            return
+        want = "inclusive" if basis == "inclusive" else "exclusive"
+        idx = self.price_basis_combo.findData(want)
+        self.price_basis_combo.blockSignals(True)
+        self.price_basis_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self.price_basis_combo.blockSignals(False)
+        if hasattr(self, "price_basis_hint"):
+            self.price_basis_hint.setText(hint if want == "inclusive" and hint else "")
+
     def _collect_items(self) -> list[dict]:
         """税込 price で返す（保存・合計用）."""
         out = []
+        basis = self.current_price_basis()
         for it in self._collect_items_raw():
-            conv = calc_inclusive(it["price_excl"], it["tax_rate_type"], self.cfg)
-            out.append(
-                {
-                    "name": it["name"],
-                    "price": float(conv["incl"]),
-                    "price_excl": it["price_excl"],
-                    "tax_rate": conv["rate"],
-                    "tax_rate_type": it["tax_rate_type"],
-                    "category": it["category"],
-                }
-            )
+            rate_type = it["tax_rate_type"]
+            printed = it["price_excl"]
+            if basis == "inclusive":
+                price = float(printed)
+                back = calc_exclusive_from_incl(price, rate_type, self.cfg)
+                out.append(
+                    {
+                        "name": it["name"],
+                        "price": price,
+                        "price_excl": float(back["excl"]),
+                        "tax_rate": back["rate"],
+                        "tax_rate_type": rate_type,
+                        "category": it["category"],
+                    }
+                )
+            else:
+                conv = calc_inclusive(printed, rate_type, self.cfg)
+                out.append(
+                    {
+                        "name": it["name"],
+                        "price": float(conv["incl"]),
+                        "price_excl": printed,
+                        "tax_rate": conv["rate"],
+                        "tax_rate_type": rate_type,
+                        "category": it["category"],
+                    }
+                )
         return out
 
     def _recalc_total(self) -> None:
         items = self._collect_items()
+        basis = self.current_price_basis()
         for row, it in enumerate(self._collect_items_raw()):
-            conv = calc_inclusive(it["price_excl"], it["tax_rate_type"], self.cfg)
+            if basis == "inclusive":
+                display = int(it["price_excl"])
+            else:
+                conv = calc_inclusive(it["price_excl"], it["tax_rate_type"], self.cfg)
+                display = int(conv["incl"])
             cell = self.items_table.item(row, 3)
             if cell:
-                cell.setText(f'{int(conv["incl"]):,}')
+                cell.setText(f"{display:,}")
         total = sum(i["price"] for i in items)
-        self.edit_total.setText(f"税込合計 {total:,.0f} 円")
+        label = "税込合計（印字額）" if basis == "inclusive" else "税込合計"
+        self.edit_total.setText(f"{label} {total:,.0f} 円")
 
     def new_receipt(self) -> None:
         self._selected_id = None
         self.shop_edit.clear()
         self.date_edit.setText(date.today().isoformat())
         self._refresh_payment_combo("現金")
+        self.set_price_basis("exclusive")
         self._clear_items()
         self._add_item_row()
         self.tabs.setCurrentIndex(1)
@@ -812,12 +869,21 @@ class MainWindow(QMainWindow):
             self._analyze_failed("レシートを検出できませんでした")
             return
 
-        self._analyzed_receipts = receipts
+        enriched = []
+        for r in receipts:
+            rr = dict(r)
+            if rr.get("price_basis") not in ("inclusive", "exclusive"):
+                basis, hint = suggest_price_basis(rr, self.cfg)
+                rr["price_basis"] = basis
+                rr["price_basis_hint"] = hint
+            enriched.append(rr)
+
+        self._analyzed_receipts = enriched
         self._analysis_index = 0
         self._selected_id = None
         self.receipt_combo.blockSignals(True)
         self.receipt_combo.clear()
-        for i, r in enumerate(receipts):
+        for i, r in enumerate(enriched):
             label = f"{i + 1}. {r.get('shop_name') or '不明'} / {r.get('date') or ''} ({len(r.get('items') or [])}件)"
             self.receipt_combo.addItem(label)
         self.receipt_combo.blockSignals(False)
@@ -848,6 +914,7 @@ class MainWindow(QMainWindow):
             "shop_name": self.shop_edit.text().strip() or "不明",
             "date": self.date_edit.text().strip() or date.today().isoformat(),
             "payment_method": self.payment_combo.currentText().strip() or "現金",
+            "price_basis": self.current_price_basis(),
             "items": items,
             "total_amount": self._analyzed_receipts[i].get("total_amount") or 0,
         }
@@ -862,6 +929,13 @@ class MainWindow(QMainWindow):
         pm = str(r.get("payment_method") or "現金").strip() or "現金"
         ensure_payment_method(pm, self.cfg)
         self._refresh_payment_combo(pm)
+        basis = r.get("price_basis")
+        hint = str(r.get("price_basis_hint") or "")
+        if basis not in ("inclusive", "exclusive"):
+            basis, hint = suggest_price_basis(r, self.cfg)
+            r["price_basis"] = basis
+            r["price_basis_hint"] = hint
+        self.set_price_basis(str(basis), hint)
         self._clear_items()
         for it in r.get("items") or []:
             self._add_item_row(

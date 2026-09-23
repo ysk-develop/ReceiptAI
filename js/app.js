@@ -12,7 +12,7 @@ import {
 import { resizeImageFile } from './image-util.js';
 import {
   getTaxSettings, saveTaxSettings, calcInclusive, normalizeRateType,
-  calcExclusiveFromIncl
+  calcExclusiveFromIncl, suggestPriceBasis
 } from './tax.js';
 import { APP_VERSION } from './version.js';
 
@@ -670,13 +670,78 @@ function refreshRowIncl(row) {
   row?._syncMetaDisplay?.();
 }
 
+function currentPriceBasis() {
+  const r = analyzedReceipts[currentReceiptIndex];
+  return r?.price_basis === 'inclusive' ? 'inclusive' : 'exclusive';
+}
+
+function syncPriceBasisUi() {
+  const sel = $('priceBasisSelect');
+  const hint = $('priceBasisHint');
+  const r = analyzedReceipts[currentReceiptIndex];
+  if (sel) sel.value = currentPriceBasis();
+  if (hint) {
+    hint.textContent = (r?.price_basis_hint && currentPriceBasis() === 'inclusive')
+      ? r.price_basis_hint
+      : '';
+  }
+  const label = $('totalBoxLabel');
+  if (label) {
+    label.textContent = currentPriceBasis() === 'inclusive'
+      ? '税込合計（印字額）'
+      : '税込合計（換算）';
+  }
+}
+
+function onPriceBasisChange() {
+  if (!analyzedReceipts.length) return;
+  const sel = $('priceBasisSelect');
+  const basis = sel?.value === 'inclusive' ? 'inclusive' : 'exclusive';
+  analyzedReceipts[currentReceiptIndex] = {
+    ...analyzedReceipts[currentReceiptIndex],
+    price_basis: basis,
+    // clear auto hint once user overrides to exclusive; keep if staying inclusive
+    price_basis_hint: basis === 'inclusive'
+      ? (analyzedReceipts[currentReceiptIndex].price_basis_hint || '')
+      : ''
+  };
+  syncPriceBasisUi();
+  calcTotal();
+  // refresh summary line without re-rendering items
+  const r = analyzedReceipts[currentReceiptIndex];
+  const shop = r.shop_name || $('shopName').value || '';
+  const dateVal = toDateInputValue(r.date || $('receiptDate').value);
+  const payment = (r.payment_method || $('paymentMethod').value || '現金').trim() || '現金';
+  const items = r.items || [];
+  const { exclSum, inclSum } = calcTotal();
+  const printedTotal = Number(r.total_amount) || 0;
+  const diff = printedTotal > 0 ? printedTotal - inclSum : 0;
+  const basisLine = basis === 'inclusive'
+    ? `<b>印字額合計（税込扱い）:</b> ${inclSum.toLocaleString()} 円`
+    : `<b>税抜合計:</b> ${exclSum.toLocaleString()} 円 → <b>税込換算:</b> ${inclSum.toLocaleString()} 円`;
+  $('detectedSummary').innerHTML =
+    `<b>検出:</b> ${escapeHtml(shop || '不明')} / ${escapeHtml(dateVal)} / ${escapeHtml(payment)}（${items.length}件）<br>` +
+    basisLine +
+    (r.price_basis_hint && basis === 'inclusive'
+      ? `<br><span class="hint">${escapeHtml(r.price_basis_hint)}</span>`
+      : '') +
+    (printedTotal > 0
+      ? `<br><b>レシート記載合計（参考）:</b> ${printedTotal.toLocaleString()} 円` +
+        (Math.abs(diff) > 0
+          ? `（差 ${diff > 0 ? '+' : ''}${diff.toLocaleString()} 円）`
+          : '（一致）')
+      : '') +
+    `<br><span class="hint">品名・税抜・税込をタップすると拡大編集できます。差額は「記載合計に合わせる」が便利です。</span>`;
+}
+
 function rowInclValue(row) {
   if (row.dataset.inclOverride !== undefined && row.dataset.inclOverride !== '') {
     return Number(row.dataset.inclOverride) || 0;
   }
-  const excl = Number(row.querySelector('.i-price')?.value) || 0;
+  const printed = Number(row.querySelector('.i-price')?.value) || 0;
+  if (currentPriceBasis() === 'inclusive') return printed;
   const rateType = normalizeRateType(row.querySelector('.i-tax')?.value);
-  return calcInclusive(excl, rateType).incl;
+  return calcInclusive(printed, rateType).incl;
 }
 
 function calcTotal() {
@@ -725,12 +790,17 @@ function openItemEditModal(row) {
     inclEl.value = String(rowInclValue(row));
 
     let inclTouched = row.dataset.inclOverride !== undefined && row.dataset.inclOverride !== '';
+    const basis = currentPriceBasis();
 
     const syncInclFromExcl = () => {
       if (inclTouched) return;
-      const excl = Math.max(0, Math.round(Number(exclEl.value) || 0));
-      const { incl } = calcInclusive(excl, normalizeRateType(taxEl.value));
-      inclEl.value = String(incl);
+      const printed = Math.max(0, Math.round(Number(exclEl.value) || 0));
+      if (basis === 'inclusive') {
+        inclEl.value = String(printed);
+      } else {
+        const { incl } = calcInclusive(printed, normalizeRateType(taxEl.value));
+        inclEl.value = String(incl);
+      }
     };
 
     exclEl.oninput = () => {
@@ -761,21 +831,30 @@ function openItemEditModal(row) {
 
     $('itemEditOk').onclick = () => {
       const name = nameEl.value.trim();
-      const excl = Math.max(0, Math.round(Number(exclEl.value) || 0));
+      const printed = Math.max(0, Math.round(Number(exclEl.value) || 0));
       const incl = Math.max(0, Math.round(Number(inclEl.value) || 0));
       const tax = normalizeRateType(taxEl.value);
       const cat = catEl.value;
-      const auto = calcInclusive(excl, tax).incl;
       row.querySelector('.i-name').value = name;
-      row.querySelector('.i-price').value = String(excl);
       row.querySelector('.i-tax').value = tax;
       row.querySelector('.i-cat').value = cat;
-      if (inclTouched || incl !== auto) {
-        row.dataset.inclOverride = String(incl);
-        const back = calcExclusiveFromIncl(incl, tax);
-        row.querySelector('.i-price').value = String(back.excl);
+      if (basis === 'inclusive') {
+        row.querySelector('.i-price').value = String(printed);
+        if (inclTouched && incl !== printed) {
+          row.dataset.inclOverride = String(incl);
+        } else {
+          delete row.dataset.inclOverride;
+        }
       } else {
-        delete row.dataset.inclOverride;
+        const auto = calcInclusive(printed, tax).incl;
+        row.querySelector('.i-price').value = String(printed);
+        if (inclTouched || incl !== auto) {
+          row.dataset.inclOverride = String(incl);
+          const back = calcExclusiveFromIncl(incl, tax);
+          row.querySelector('.i-price').value = String(back.excl);
+        } else {
+          delete row.dataset.inclOverride;
+        }
       }
       row._syncNameDisplay?.();
       row._syncMetaDisplay?.();
@@ -888,21 +967,39 @@ function collectItemsRaw() {
 }
 
 /** Collect for save: price = 税込（家計簿の正） */
-function collectItemsForSave() {
+function itemsForSaveFromRaw(rawItems, basis = 'exclusive') {
   const tax = getTaxSettings();
-  return collectItemsRaw().map((it) => {
+  const mode = basis === 'inclusive' ? 'inclusive' : 'exclusive';
+  return (rawItems || []).map((it) => {
     const rateType = normalizeRateType(it.tax_rate_type, tax);
-    const { incl, rate } = calcInclusive(it.price_excl, rateType, tax);
+    const printed = Number(it.price_excl ?? it.price) || 0;
+    if (mode === 'inclusive') {
+      const price = it.incl_override != null ? Number(it.incl_override) : printed;
+      const back = calcExclusiveFromIncl(price, rateType, tax);
+      return {
+        name: it.name || '（未入力）',
+        price,
+        price_excl: back.excl,
+        tax_rate: back.rate,
+        tax_rate_type: rateType,
+        category: it.category || 'その他'
+      };
+    }
+    const { incl, rate } = calcInclusive(printed, rateType, tax);
     const price = it.incl_override != null ? Number(it.incl_override) : incl;
     return {
-      name: it.name,
+      name: it.name || '（未入力）',
       price,
-      price_excl: it.price_excl,
+      price_excl: printed,
       tax_rate: rate,
       tax_rate_type: rateType,
-      category: it.category
+      category: it.category || 'その他'
     };
-  });
+  }).filter((it) => it.name || it.price > 0);
+}
+
+function collectItemsForSave() {
+  return itemsForSaveFromRaw(collectItemsRaw(), currentPriceBasis());
 }
 
 function collectItems() {
@@ -955,13 +1052,21 @@ function openEditor(parsed) {
       date: todayStr(),
       total_amount: 0,
       payment_method: '現金',
+      price_basis: 'exclusive',
       items: []
     }];
   }
   analyzedReceipts = analyzedReceipts.map((r) => {
     const pm = (r.payment_method || '現金').trim() || '現金';
     ensurePaymentMethodInList(pm);
-    return { ...r, payment_method: pm };
+    let basis = r.price_basis;
+    let hint = r.price_basis_hint || '';
+    if (basis !== 'inclusive' && basis !== 'exclusive') {
+      const sug = suggestPriceBasis(r);
+      basis = sug.basis;
+      hint = sug.reason;
+    }
+    return { ...r, payment_method: pm, price_basis: basis, price_basis_hint: hint };
   });
   currentReceiptIndex = 0;
   showReceiptAt(0);
@@ -976,6 +1081,7 @@ function showReceiptAt(index) {
   const dateVal = toDateInputValue(r.date);
   const payment = (r.payment_method || '現金').trim() || '現金';
   const items = r.items || [];
+  const basis = r.price_basis === 'inclusive' ? 'inclusive' : 'exclusive';
 
   $('shopName').value = shop;
   syncShopNameDisplay();
@@ -984,15 +1090,22 @@ function showReceiptAt(index) {
   $('paymentMethod').value = payment;
   ensurePaymentMethodInList(payment);
   syncPaymentDisplay();
+  syncPriceBasisUi();
   renderItems(items);
 
   const { exclSum, inclSum } = calcTotal();
   const printedTotal = Number(r.total_amount) || 0;
   const diff = printedTotal > 0 ? printedTotal - inclSum : 0;
+  const basisLine = basis === 'inclusive'
+    ? `<b>印字額合計（税込扱い）:</b> ${inclSum.toLocaleString()} 円`
+    : `<b>税抜合計:</b> ${exclSum.toLocaleString()} 円 → <b>税込換算:</b> ${inclSum.toLocaleString()} 円`;
 
   $('detectedSummary').innerHTML =
     `<b>検出:</b> ${escapeHtml(shop || '不明')} / ${escapeHtml(dateVal)} / ${escapeHtml(payment)}（${items.length}件）<br>` +
-    `<b>税抜合計:</b> ${exclSum.toLocaleString()} 円 → <b>税込換算:</b> ${inclSum.toLocaleString()} 円` +
+    basisLine +
+    (r.price_basis_hint && basis === 'inclusive'
+      ? `<br><span class="hint">${escapeHtml(r.price_basis_hint)}</span>`
+      : '') +
     (printedTotal > 0
       ? `<br><b>レシート記載合計（参考）:</b> ${printedTotal.toLocaleString()} 円` +
         (Math.abs(diff) > 0
@@ -1035,6 +1148,7 @@ function stashCurrentReceiptEdits() {
     shop_name: $('shopName').value.trim() || '不明',
     date: receiptDateForSave(),
     payment_method: ($('paymentMethod').value || '現金').trim() || '現金',
+    price_basis: currentPriceBasis(),
     items,
     // keep printed total as reference; working total is converted
     total_amount: analyzedReceipts[currentReceiptIndex].total_amount,
@@ -1297,21 +1411,8 @@ async function handleSendAll() {
       const r = analyzedReceipts[i];
       const rawItems = r.items || [];
       if (!rawItems.length) continue;
-      const tax = getTaxSettings();
-      const itemsSave = rawItems.map((it) => {
-        const excl = Number(it.price_excl ?? it.price) || 0;
-        const rateType = normalizeRateType(it.tax_rate_type, tax);
-        const { incl, rate } = calcInclusive(excl, rateType, tax);
-        const price = it.incl_override != null ? Number(it.incl_override) : incl;
-        return {
-          name: it.name || '（未入力）',
-          price,
-          price_excl: excl,
-          tax_rate: rate,
-          tax_rate_type: rateType,
-          category: it.category || 'その他'
-        };
-      }).filter((it) => it.name || it.price > 0);
+      const basis = r.price_basis === 'inclusive' ? 'inclusive' : 'exclusive';
+      const itemsSave = itemsForSaveFromRaw(rawItems, basis);
 
       if (!itemsSave.length) continue;
 
@@ -1658,6 +1759,7 @@ function init() {
   $('editDateBtn')?.addEventListener('click', editReceiptDate);
   $('paymentDisplay')?.addEventListener('click', editPaymentMethod);
   $('editPaymentBtn')?.addEventListener('click', editPaymentMethod);
+  $('priceBasisSelect')?.addEventListener('change', onPriceBasisChange);
   $('forceUpdateBtn')?.addEventListener('click', forceAppUpdate);
   $('deleteApiKeyBtn').addEventListener('click', () => {
     if (!confirm('APIキーをこの端末から削除しますか？')) return;

@@ -30,8 +30,8 @@ function $(id) {
   return document.getElementById(id);
 }
 
-function show(el) { el.classList.remove('hidden'); }
-function hide(el) { el.classList.add('hidden'); }
+function show(el) { el?.classList.remove('hidden'); }
+function hide(el) { el?.classList.add('hidden'); }
 
 function showMessage(msg, type = 'error') {
   const el = $('errorArea');
@@ -476,14 +476,21 @@ function openFieldModal({ title, label, mode, value, options = [] }) {
     const numEl = $('fieldModalNumber');
     const dateEl = $('fieldModalDate');
     const selectEl = $('fieldModalSelect');
+    const choicesEl = $('fieldModalChoices');
+    const okBtn = $('fieldModalOk');
     $('fieldModalTitle').textContent = title;
     $('fieldModalLabel').textContent = label || '';
 
     hide(textEl);
     hide(numEl);
-    if (dateEl) hide(dateEl);
-    if (selectEl) hide(selectEl);
-    let active;
+    hide(dateEl);
+    hide(selectEl);
+    hide(choicesEl);
+    if (okBtn) show(okBtn);
+
+    let active = null;
+    let choiceValue = String(value ?? '');
+
     if (mode === 'text') {
       show(textEl);
       textEl.value = value ?? '';
@@ -492,15 +499,49 @@ function openFieldModal({ title, label, mode, value, options = [] }) {
       show(dateEl);
       dateEl.value = toDateInputValue(value) || todayStr();
       active = dateEl;
+    } else if (mode === 'choice') {
+      if (!choicesEl) {
+        showMessage('編集UIを表示できません。設定から「最新版を読み込み」を実行してください');
+        resolve(null);
+        return;
+      }
+      show(choicesEl);
+      if (okBtn) hide(okBtn);
+      const opts = options.length ? options : [];
+      choicesEl.innerHTML = opts.map((o) => {
+        const v = typeof o === 'object' && o != null ? String(o.value) : String(o);
+        const lab = typeof o === 'object' && o != null ? String(o.label ?? o.value) : String(o);
+        const hint = typeof o === 'object' && o != null && o.hint ? String(o.hint) : '';
+        const selected = v === String(value) ? ' is-selected' : '';
+        return `<button type="button" class="field-choice-btn${selected}" data-value="${escapeHtml(v)}">` +
+          `<span class="field-choice-label">${escapeHtml(lab)}</span>` +
+          (hint ? `<span class="field-choice-hint">${escapeHtml(hint)}</span>` : '') +
+          `</button>`;
+      }).join('');
+      choicesEl.querySelectorAll('.field-choice-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          finish(btn.getAttribute('data-value') || '');
+        });
+      });
+      active = choicesEl;
     } else if (mode === 'select') {
+      if (!selectEl) {
+        showMessage('選択UIを表示できません。設定から「最新版を読み込み」を実行してください');
+        resolve(null);
+        return;
+      }
       show(selectEl);
       const opts = options.length ? options : [String(value || '')];
-      selectEl.innerHTML = opts.map((o) => {
+      selectEl.innerHTML = '';
+      opts.forEach((o) => {
         const v = typeof o === 'object' && o != null ? String(o.value) : String(o);
-        const label = typeof o === 'object' && o != null ? String(o.label ?? o.value) : String(o);
-        const sel = v === String(value) ? ' selected' : '';
-        return `<option value="${escapeHtml(v)}"${sel}>${escapeHtml(label)}</option>`;
-      }).join('');
+        const lab = typeof o === 'object' && o != null ? String(o.label ?? o.value) : String(o);
+        const opt = document.createElement('option');
+        opt.value = v;
+        opt.textContent = lab;
+        if (v === String(value)) opt.selected = true;
+        selectEl.appendChild(opt);
+      });
       if (value && ![...selectEl.options].some((o) => o.value === String(value))) {
         const opt = document.createElement('option');
         opt.value = String(value);
@@ -517,9 +558,15 @@ function openFieldModal({ title, label, mode, value, options = [] }) {
 
     show(modal);
     setTimeout(() => {
-      active.focus();
-      if (mode === 'text') textEl.setSelectionRange(textEl.value.length, textEl.value.length);
-      else if (mode === 'number') numEl.select();
+      try {
+        if (active && typeof active.focus === 'function' && mode !== 'choice') {
+          active.focus();
+        }
+        if (mode === 'text') textEl.setSelectionRange(textEl.value.length, textEl.value.length);
+        else if (mode === 'number') numEl.select();
+      } catch {
+        /* iOS etc. */
+      }
     }, 50);
 
     const finish = (result) => {
@@ -530,6 +577,8 @@ function openFieldModal({ title, label, mode, value, options = [] }) {
       numEl.onkeydown = null;
       if (dateEl) dateEl.onkeydown = null;
       if (selectEl) selectEl.onkeydown = null;
+      if (choicesEl) choicesEl.innerHTML = '';
+      if (okBtn) show(okBtn);
       hide(modal);
       resolve(result);
     };
@@ -537,7 +586,8 @@ function openFieldModal({ title, label, mode, value, options = [] }) {
     const confirm = () => {
       if (mode === 'text') finish(textEl.value);
       else if (mode === 'date') finish(dateEl.value || '');
-      else if (mode === 'select') finish(selectEl.value || '');
+      else if (mode === 'select') finish(selectEl?.value || '');
+      else if (mode === 'choice') finish(choiceValue || null);
       else finish(numEl.value === '' ? '' : Number(numEl.value));
     };
     const onKey = (e) => {
@@ -549,8 +599,8 @@ function openFieldModal({ title, label, mode, value, options = [] }) {
         finish(null);
       }
     };
-    textEl.onkeydown = onKey;
-    numEl.onkeydown = onKey;
+    if (textEl) textEl.onkeydown = onKey;
+    if (numEl) numEl.onkeydown = onKey;
     if (dateEl) dateEl.onkeydown = onKey;
     if (selectEl) selectEl.onkeydown = onKey;
 
@@ -784,18 +834,23 @@ async function editPriceBasis() {
     showMessage('先にレシートを解析してください');
     return;
   }
-  const next = await openFieldModal({
-    title: '印字金額の扱い',
-    label: '品目の印字額をどう集計するか',
-    mode: 'select',
-    value: currentPriceBasis(),
-    options: [
-      { value: 'exclusive', label: '税抜加算（税率を足す）' },
-      { value: 'inclusive', label: '税込のまま（再計算しない）' }
-    ]
-  });
-  if (next === null) return;
-  applyPriceBasis(next === 'inclusive' ? 'inclusive' : 'exclusive', { announce: true });
+  try {
+    const next = await openFieldModal({
+      title: '印字金額の扱い',
+      label: '品目の印字額をどう集計するか（タップで決定）',
+      mode: 'choice',
+      value: currentPriceBasis(),
+      options: [
+        { value: 'exclusive', label: '税抜加算', hint: '税率を足して集計' },
+        { value: 'inclusive', label: '税込のまま', hint: '印字額を再計算しない' }
+      ]
+    });
+    if (next === null || next === '') return;
+    applyPriceBasis(next === 'inclusive' ? 'inclusive' : 'exclusive', { announce: true });
+  } catch (err) {
+    console.error(err);
+    showMessage(`編集画面を開けませんでした: ${err.message || err}`);
+  }
 }
 
 function rowInclValue(row) {

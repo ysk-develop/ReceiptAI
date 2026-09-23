@@ -408,13 +408,11 @@ main {
   white-space: nowrap;
 }
 
-.price-basis-row {
-  margin: 0.75rem 0 0.5rem;
+.meta-hint {
+  margin: -0.15rem 0 0.5rem;
+  padding-left: 0.15rem;
 }
 
-.price-basis-row .hint {
-  margin: 0.35rem 0 0;
-}
 .item-line {
   display: flex;
   flex-direction: column;

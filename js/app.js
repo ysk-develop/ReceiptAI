@@ -496,9 +496,10 @@ function openFieldModal({ title, label, mode, value, options = [] }) {
       show(selectEl);
       const opts = options.length ? options : [String(value || '')];
       selectEl.innerHTML = opts.map((o) => {
-        const v = String(o);
+        const v = typeof o === 'object' && o != null ? String(o.value) : String(o);
+        const label = typeof o === 'object' && o != null ? String(o.label ?? o.value) : String(o);
         const sel = v === String(value) ? ' selected' : '';
-        return `<option value="${escapeHtml(v)}"${sel}>${escapeHtml(v)}</option>`;
+        return `<option value="${escapeHtml(v)}"${sel}>${escapeHtml(label)}</option>`;
       }).join('');
       if (value && ![...selectEl.options].some((o) => o.value === String(value))) {
         const opt = document.createElement('option');
@@ -670,49 +671,55 @@ function refreshRowIncl(row) {
   row?._syncMetaDisplay?.();
 }
 
+const PRICE_BASIS_LABELS = {
+  exclusive: '税抜加算',
+  inclusive: '税込のまま'
+};
+
 function currentPriceBasis() {
   const r = analyzedReceipts[currentReceiptIndex];
-  return r?.price_basis === 'inclusive' ? 'inclusive' : 'exclusive';
+  if (r?.price_basis === 'inclusive' || r?.price_basis === 'exclusive') {
+    return r.price_basis;
+  }
+  const hidden = $('priceBasis');
+  return hidden?.value === 'inclusive' ? 'inclusive' : 'exclusive';
 }
 
 function syncPriceBasisUi() {
-  const sel = $('priceBasisSelect');
+  const basis = currentPriceBasis();
+  const hidden = $('priceBasis');
+  const btn = $('priceBasisDisplay');
   const hint = $('priceBasisHint');
   const r = analyzedReceipts[currentReceiptIndex];
-  if (sel) sel.value = currentPriceBasis();
+  if (hidden) hidden.value = basis;
+  if (btn) {
+    btn.textContent = PRICE_BASIS_LABELS[basis] || PRICE_BASIS_LABELS.exclusive;
+    btn.dataset.empty = '0';
+    btn.title = basis === 'inclusive'
+      ? '印字額を税込としてそのまま集計'
+      : '印字額を税抜として税率を加算';
+  }
   if (hint) {
-    hint.textContent = (r?.price_basis_hint && currentPriceBasis() === 'inclusive')
+    hint.textContent = (r?.price_basis_hint && basis === 'inclusive')
       ? r.price_basis_hint
       : '';
   }
   const label = $('totalBoxLabel');
   if (label) {
-    label.textContent = currentPriceBasis() === 'inclusive'
+    label.textContent = basis === 'inclusive'
       ? '税込合計（印字額）'
       : '税込合計（換算）';
   }
 }
 
-function onPriceBasisChange() {
+function refreshReceiptSummary() {
   if (!analyzedReceipts.length) return;
-  const sel = $('priceBasisSelect');
-  const basis = sel?.value === 'inclusive' ? 'inclusive' : 'exclusive';
-  analyzedReceipts[currentReceiptIndex] = {
-    ...analyzedReceipts[currentReceiptIndex],
-    price_basis: basis,
-    // clear auto hint once user overrides to exclusive; keep if staying inclusive
-    price_basis_hint: basis === 'inclusive'
-      ? (analyzedReceipts[currentReceiptIndex].price_basis_hint || '')
-      : ''
-  };
-  syncPriceBasisUi();
-  calcTotal();
-  // refresh summary line without re-rendering items
   const r = analyzedReceipts[currentReceiptIndex];
+  const basis = currentPriceBasis();
   const shop = r.shop_name || $('shopName').value || '';
   const dateVal = toDateInputValue(r.date || $('receiptDate').value);
   const payment = (r.payment_method || $('paymentMethod').value || '現金').trim() || '現金';
-  const items = r.items || [];
+  const itemsLen = (r.items || []).length || document.querySelectorAll('#itemList .item-row').length;
   const { exclSum, inclSum } = calcTotal();
   const printedTotal = Number(r.total_amount) || 0;
   const diff = printedTotal > 0 ? printedTotal - inclSum : 0;
@@ -720,7 +727,7 @@ function onPriceBasisChange() {
     ? `<b>印字額合計（税込扱い）:</b> ${inclSum.toLocaleString()} 円`
     : `<b>税抜合計:</b> ${exclSum.toLocaleString()} 円 → <b>税込換算:</b> ${inclSum.toLocaleString()} 円`;
   $('detectedSummary').innerHTML =
-    `<b>検出:</b> ${escapeHtml(shop || '不明')} / ${escapeHtml(dateVal)} / ${escapeHtml(payment)}（${items.length}件）<br>` +
+    `<b>検出:</b> ${escapeHtml(shop || '不明')} / ${escapeHtml(dateVal)} / ${escapeHtml(payment)}（${itemsLen}件）<br>` +
     basisLine +
     (r.price_basis_hint && basis === 'inclusive'
       ? `<br><span class="hint">${escapeHtml(r.price_basis_hint)}</span>`
@@ -732,6 +739,63 @@ function onPriceBasisChange() {
           : '（一致）')
       : '') +
     `<br><span class="hint">品名・税抜・税込をタップすると拡大編集できます。差額は「記載合計に合わせる」が便利です。</span>`;
+
+  const hint = $('receiptTotalHint');
+  if (hint) {
+    hint.textContent = printedTotal > 0 && Math.abs(diff) > 0
+      ? `記載合計 ${printedTotal.toLocaleString()} 円 / 集計 ${inclSum.toLocaleString()} 円（差 ${diff.toLocaleString()} 円）`
+      : '';
+  }
+}
+
+function applyPriceBasis(basis, { announce = false } = {}) {
+  if (!analyzedReceipts.length) return;
+  const next = basis === 'inclusive' ? 'inclusive' : 'exclusive';
+  const prevTotal = calcTotal().inclSum;
+  analyzedReceipts[currentReceiptIndex] = {
+    ...analyzedReceipts[currentReceiptIndex],
+    price_basis: next,
+    price_basis_hint: next === 'inclusive'
+      ? (analyzedReceipts[currentReceiptIndex].price_basis_hint || '')
+      : ''
+  };
+  const hidden = $('priceBasis');
+  if (hidden) hidden.value = next;
+  syncPriceBasisUi();
+  refreshReceiptSummary();
+  const newTotal = calcTotal().inclSum;
+  if (announce) {
+    if (prevTotal !== newTotal) {
+      showMessage(
+        `${PRICE_BASIS_LABELS[next]}に変更（合計 ${prevTotal.toLocaleString()} → ${newTotal.toLocaleString()} 円）`,
+        'success'
+      );
+    } else {
+      showMessage(
+        `${PRICE_BASIS_LABELS[next]}に変更しました（合計は同じ ${newTotal.toLocaleString()} 円）`,
+        'success'
+      );
+    }
+  }
+}
+
+async function editPriceBasis() {
+  if (!analyzedReceipts.length) {
+    showMessage('先にレシートを解析してください');
+    return;
+  }
+  const next = await openFieldModal({
+    title: '印字金額の扱い',
+    label: '品目の印字額をどう集計するか',
+    mode: 'select',
+    value: currentPriceBasis(),
+    options: [
+      { value: 'exclusive', label: '税抜加算（税率を足す）' },
+      { value: 'inclusive', label: '税込のまま（再計算しない）' }
+    ]
+  });
+  if (next === null) return;
+  applyPriceBasis(next === 'inclusive' ? 'inclusive' : 'exclusive', { announce: true });
 }
 
 function rowInclValue(row) {
@@ -1082,6 +1146,7 @@ function showReceiptAt(index) {
   const payment = (r.payment_method || '現金').trim() || '現金';
   const items = r.items || [];
   const basis = r.price_basis === 'inclusive' ? 'inclusive' : 'exclusive';
+  r.price_basis = basis;
 
   $('shopName').value = shop;
   syncShopNameDisplay();
@@ -1090,36 +1155,10 @@ function showReceiptAt(index) {
   $('paymentMethod').value = payment;
   ensurePaymentMethodInList(payment);
   syncPaymentDisplay();
+  if ($('priceBasis')) $('priceBasis').value = basis;
   syncPriceBasisUi();
   renderItems(items);
-
-  const { exclSum, inclSum } = calcTotal();
-  const printedTotal = Number(r.total_amount) || 0;
-  const diff = printedTotal > 0 ? printedTotal - inclSum : 0;
-  const basisLine = basis === 'inclusive'
-    ? `<b>印字額合計（税込扱い）:</b> ${inclSum.toLocaleString()} 円`
-    : `<b>税抜合計:</b> ${exclSum.toLocaleString()} 円 → <b>税込換算:</b> ${inclSum.toLocaleString()} 円`;
-
-  $('detectedSummary').innerHTML =
-    `<b>検出:</b> ${escapeHtml(shop || '不明')} / ${escapeHtml(dateVal)} / ${escapeHtml(payment)}（${items.length}件）<br>` +
-    basisLine +
-    (r.price_basis_hint && basis === 'inclusive'
-      ? `<br><span class="hint">${escapeHtml(r.price_basis_hint)}</span>`
-      : '') +
-    (printedTotal > 0
-      ? `<br><b>レシート記載合計（参考）:</b> ${printedTotal.toLocaleString()} 円` +
-        (Math.abs(diff) > 0
-          ? `（差 ${diff > 0 ? '+' : ''}${diff.toLocaleString()} 円）`
-          : '（一致）')
-      : '') +
-    `<br><span class="hint">品名・税抜・税込をタップすると拡大編集できます。差額は「記載合計に合わせる」が便利です。</span>`;
-
-  const hint = $('receiptTotalHint');
-  if (hint) {
-    hint.textContent = printedTotal > 0 && Math.abs(diff) > 0
-      ? `記載合計 ${printedTotal.toLocaleString()} 円 / 税込換算 ${inclSum.toLocaleString()} 円（差 ${diff.toLocaleString()} 円）`
-      : '';
-  }
+  refreshReceiptSummary();
 
   const multi = analyzedReceipts.length > 1;
   if (multi) {
@@ -1135,7 +1174,6 @@ function showReceiptAt(index) {
     hide($('receiptNavLabel'));
     hide($('sendAllBtn'));
   }
-  calcTotal();
 }
 
 /** Persist current form edits back into analyzedReceipts[current] */
@@ -1190,6 +1228,8 @@ function handleClear() {
   syncDateDisplay();
   $('paymentMethod').value = '現金';
   syncPaymentDisplay();
+  if ($('priceBasis')) $('priceBasis').value = 'exclusive';
+  syncPriceBasisUi();
   calcTotal();
 }
 
@@ -1759,7 +1799,8 @@ function init() {
   $('editDateBtn')?.addEventListener('click', editReceiptDate);
   $('paymentDisplay')?.addEventListener('click', editPaymentMethod);
   $('editPaymentBtn')?.addEventListener('click', editPaymentMethod);
-  $('priceBasisSelect')?.addEventListener('change', onPriceBasisChange);
+  $('priceBasisDisplay')?.addEventListener('click', editPriceBasis);
+  $('editPriceBasisBtn')?.addEventListener('click', editPriceBasis);
   $('forceUpdateBtn')?.addEventListener('click', forceAppUpdate);
   $('deleteApiKeyBtn').addEventListener('click', () => {
     if (!confirm('APIキーをこの端末から削除しますか？')) return;

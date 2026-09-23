@@ -90,7 +90,8 @@ const LINE_SCHEMA = {
     name: { type: 'string', description: '品目名（小計・税・合計行は出さない）' },
     price: {
       type: 'number',
-      description: 'レシート印字の個別金額（税抜が多い。換算せず印字どおり）'
+      description:
+        '品目の実効金額（クーポン・値引があれば差し引き後）。換算せずレシート基準。割引専用行は出さない'
     },
     tax_rate_type: {
       type: 'string',
@@ -151,6 +152,12 @@ function buildPrompt(today, memo) {
 - tax_rate_type は軽減対象（*・軽・8%など）なら "reduced"、それ以外は "standard"。
 - 小計・消費税・内税・外税・合計の行は lines に入れない。
 
+【クーポン・値引（重要）】
+- 「自動割引」「クーポン」「値引」などのマイナス行は、独立した品目にしない。
+- 直前の対象品目の price から割引額を差し引いた実効額だけをその品目の price にする。
+- 例: 95円の直後にクーポン -15円 → その品目は price=80 のみ（割引行は出さない）。
+- レシート全体の割引で対象品目が不明なときのみ、name「クーポン割引」price を負の数で1行出してよい。
+
 カテゴリは次から選択: [${categoryList}]
 不明な日付のみ ${today} を使う。時刻が印字されていれば date に含める。店舗名が読めないときのみ「不明」。
 JSONのみ出力。`;
@@ -161,7 +168,7 @@ JSONのみ出力。`;
 function buildRetryPrompt(today, expectedCount, gotCount) {
   return `前回の抽出では receipt_count=${expectedCount} なのに lines から再構成したレシートが ${gotCount} 枚しかありませんでした。
 画像内の紙レシートを左から右へすべて再抽出し、receipt_count 枚ぶんの品目を lines に出力してください。
-price はレシート印字の個別金額をそのまま（税抜・税込の換算はしない）。total_amount は税込合計。小計・税・合計行は lines に入れない。日付不明のみ ${today}。
+price はレシート印字の個別金額をそのまま（税抜・税込の換算はしない）。クーポン・値引は直前品目の price から差し引いた実効額にし、割引行は出さない。total_amount は税込合計。小計・税・合計行は lines に入れない。日付不明のみ ${today}。
 JSONのみ。`;
 }
 
@@ -194,6 +201,42 @@ function normalizeReceiptDate(value, fallback) {
   return out;
 }
 
+function isDiscountLineName(name) {
+  const n = String(name || '');
+  if (!n) return false;
+  if (/^(小計|合計|税|消費税|内税|外税|お預り|お釣り|お会計)/.test(n)) return false;
+  return /割引|クーポン|値引|値引き|ねびき|％\s*OFF|%\s*OFF|値下/i.test(n);
+}
+
+/**
+ * Merge coupon/discount lines into the preceding item's net price (approach A).
+ * If the model already output net prices, this is a no-op.
+ */
+export function mergeDiscountIntoItems(items) {
+  const out = [];
+  for (const it of items || []) {
+    const name = String(it.name || '').trim() || '（未入力）';
+    const price = Number(it.price) || 0;
+    const isDisc = price < 0 || isDiscountLineName(name);
+    if (isDisc) {
+      const disc = Math.abs(price);
+      if (!out.length || disc <= 0) continue;
+      const prev = out[out.length - 1];
+      out[out.length - 1] = {
+        ...prev,
+        price: Math.max(0, (Number(prev.price) || 0) - disc)
+      };
+      continue;
+    }
+    out.push({
+      ...it,
+      name,
+      price
+    });
+  }
+  return out;
+}
+
 /**
  * Group flat lines (or legacy receipts[]) into receipt objects.
  */
@@ -220,7 +263,7 @@ export function normalizeAnalysisResult(parsed, today = localTodayStr()) {
       if (/^(小計|合計|税|消費税|内税|外税|お預り|お釣り|お会計)/.test(name)) continue;
       g.items.push({
         name: name || '（未入力）',
-        price, // 税抜（印字）
+        price,
         tax_rate_type: (line.tax_rate_type === 'reduced') ? 'reduced' : 'standard',
         category: String(line.category || 'その他')
       });
@@ -237,10 +280,11 @@ export function normalizeAnalysisResult(parsed, today = localTodayStr()) {
     const list = [...groups.entries()]
       .sort((a, b) => a[0] - b[0])
       .map(([, r], i) => {
-        const itemsSum = r.items.reduce((s, it) => s + it.price, 0);
+        const items = mergeDiscountIntoItems(r.items);
+        const itemsSum = items.reduce((s, it) => s + it.price, 0);
         let total = Number(r.total_amount);
         if (!Number.isFinite(total) || total <= 0) total = itemsSum;
-        return { ...r, total_amount: total, _index: i };
+        return { ...r, items, total_amount: total, _index: i };
       })
       .filter((r) => r.items.length > 0);
 
@@ -256,12 +300,14 @@ export function normalizeAnalysisResult(parsed, today = localTodayStr()) {
   }
 
   return list.map((r, idx) => {
-    const items = (r.items || []).map((it) => ({
-      name: String(it.name || '（未入力）'),
-      price: Number(it.price) || 0,
-      tax_rate_type: it.tax_rate_type === 'reduced' ? 'reduced' : 'standard',
-      category: String(it.category || 'その他')
-    })).filter((it) => it.name || it.price);
+    const items = mergeDiscountIntoItems(
+      (r.items || []).map((it) => ({
+        name: String(it.name || '（未入力）'),
+        price: Number(it.price) || 0,
+        tax_rate_type: it.tax_rate_type === 'reduced' ? 'reduced' : 'standard',
+        category: String(it.category || 'その他')
+      })).filter((it) => it.name || it.price)
+    );
 
     const itemsSum = items.reduce((s, it) => s + it.price, 0);
     let total = Number(r.total_amount);

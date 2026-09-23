@@ -27,7 +27,10 @@ LINE_SCHEMA = {
             "description": "支払い方法。例: 現金, WAON, PayPay, 楽天Pay, クレジット。不明なら現金",
         },
         "name": {"type": "string"},
-        "price": {"type": "number", "description": "印字の個別金額（税抜が多い）"},
+        "price": {
+            "type": "number",
+            "description": "品目の実効金額（クーポン・値引があれば差し引き後）。割引専用行は出さない",
+        },
         "tax_rate_type": {"type": "string", "description": "standard or reduced"},
         "category": {"type": "string"},
     },
@@ -216,6 +219,37 @@ def normalize_payment_method(value: object) -> str:
     return cleaned or "現金"
 
 
+def _is_discount_line_name(name: str) -> bool:
+    n = str(name or "")
+    if not n:
+        return False
+    if re.match(r"^(小計|合計|税|消費税|内税|外税|お預り|お釣り|お会計)", n):
+        return False
+    return bool(re.search(r"割引|クーポン|値引|値引き|ねびき|％\s*OFF|%\s*OFF|値下", n, re.I))
+
+
+def merge_discount_into_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Merge coupon/discount lines into the preceding item's net price."""
+    out: list[dict[str, Any]] = []
+    for it in items or []:
+        name = str(it.get("name") or "").strip() or "（未入力）"
+        try:
+            price = float(it.get("price") or 0)
+        except (TypeError, ValueError):
+            price = 0.0
+        is_disc = price < 0 or _is_discount_line_name(name)
+        if is_disc:
+            disc = abs(price)
+            if not out or disc <= 0:
+                continue
+            prev = out[-1]
+            prev_price = float(prev.get("price") or 0)
+            out[-1] = {**prev, "price": max(0.0, prev_price - disc)}
+            continue
+        out.append({**it, "name": name, "price": price})
+    return out
+
+
 def normalize_analysis_result(parsed: dict[str, Any], today: str) -> list[dict[str, Any]]:
     if isinstance(parsed.get("lines"), list) and parsed["lines"]:
         groups: dict[int, dict[str, Any]] = {}
@@ -234,7 +268,10 @@ def normalize_analysis_result(parsed: dict[str, Any], today: str) -> list[dict[s
                 }
             g = groups[idx]
             name = str(line.get("name") or "").strip()
-            price = float(line.get("price") or 0)
+            try:
+                price = float(line.get("price") if line.get("price") is not None else 0)
+            except (TypeError, ValueError):
+                price = 0.0
             if not name and not price:
                 continue
             if re.match(r"^(小計|合計|税|消費税|内税|外税|お預り|お釣り|お会計)", name):
@@ -260,13 +297,14 @@ def normalize_analysis_result(parsed: dict[str, Any], today: str) -> list[dict[s
         out = []
         for i, key in enumerate(sorted(groups.keys())):
             r = groups[key]
-            items_sum = sum(x["price"] for x in r["items"])
+            items = merge_discount_into_items(r["items"])
+            items_sum = sum(x["price"] for x in items)
             total = float(r["total_amount"] or 0)
             if total <= 0:
                 total = items_sum
-            if not r["items"]:
+            if not items:
                 continue
-            out.append({**r, "total_amount": total, "_index": i})
+            out.append({**r, "items": items, "total_amount": total, "_index": i})
         return out
 
     if isinstance(parsed.get("receipts"), list) and parsed["receipts"]:
@@ -284,10 +322,11 @@ def normalize_analysis_result(parsed: dict[str, Any], today: str) -> list[dict[s
                 {
                     "name": str(it.get("name") or "（未入力）"),
                     "price": float(it.get("price") or 0),
+                    "tax_rate_type": "reduced" if it.get("tax_rate_type") == "reduced" else "standard",
                     "category": str(it.get("category") or "その他"),
                 }
             )
-        items = [x for x in items if x["name"] or x["price"]]
+        items = merge_discount_into_items([x for x in items if x["name"] or x["price"]])
         if not items:
             continue
         items_sum = sum(x["price"] for x in items)
@@ -332,6 +371,7 @@ def analyze_receipt(
 
 【金額】price はレシート印字の個別金額をそのまま（税抜・税込へ勝手に換算しない）。tax_rate_type は軽減なら reduced、それ以外は standard。
 total_amount はレシート税込合計（参考）。小計・税・合計行は lines に入れない。
+【クーポン・値引】「自動割引」「クーポン」「値引」行は独立品目にしない。直前品目の price から差し引いた実効額だけ出す（例: 95円の直後に-15円 → price=80）。
 【支払い方法】合計直下や「○○支払」「現金」「クレジット」などから payment_method を読み取る。不明なら現金。
 カテゴリ: [{cats}]
 日付不明のみ {today}。JSONのみ。"""
@@ -390,7 +430,8 @@ total_amount はレシート税込合計（参考）。小計・税・合計行�
                 retry = (
                     f"前回は receipt_count={declared} なのに {len(receipts)} 枚しか再構成できませんでした。"
                     f"左から右へ全レシートの品目を lines に再出力してください。"
-                    f"price は印字どおり（換算しない）。total_amount は税込合計。JSONのみ。"
+                    f"price は印字どおり（換算しない）。クーポン・値引は直前品目へ差し引いた実効額にし割引行は出さない。"
+                    f"total_amount は税込合計。JSONのみ。"
                 )
                 if memo.strip():
                     retry += f"\n\n【入力メモ】\n{memo.strip()}"
